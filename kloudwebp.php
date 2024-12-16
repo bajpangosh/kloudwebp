@@ -984,36 +984,43 @@ function kloudwebp_convert_with_imagick($file_path, $webp_path, $quality) {
 }
 
 function kloudwebp_convert_with_gd($file_path, $webp_path, $quality) {
-    $image_info = getimagesize($file_path);
-    if (!$image_info) {
-        throw new Exception("Unable to get image information");
+    kloudwebp_log_debug("Attempting GD conversion for: " . $file_path);
+
+    try {
+        $image = null;
+        $mime_type = wp_check_filetype($file_path)['type'];
+
+        switch ($mime_type) {
+            case 'image/jpeg':
+                $image = imagecreatefromjpeg($file_path);
+                break;
+            case 'image/png':
+                $image = imagecreatefrompng($file_path);
+                break;
+            default:
+                kloudwebp_log_error("Unsupported image type for GD conversion: " . $mime_type);
+                return false;
+        }
+
+        if (!$image) {
+            kloudwebp_log_error("Failed to create GD image resource for: " . $file_path);
+            return false;
+        }
+
+        if (!imagewebp($image, $webp_path, $quality)) {
+            kloudwebp_log_error("GD conversion failed for: " . $file_path);
+            imagedestroy($image);
+            return false;
+        }
+
+        imagedestroy($image);
+        kloudwebp_log_debug("GD conversion successful for: " . $file_path);
+        return true;
+
+    } catch (Exception $e) {
+        kloudwebp_log_error("Exception during GD conversion for: " . $file_path . " - " . $e->getMessage());
+        return false;
     }
-    
-    $source = null;
-    switch ($image_info['mime']) {
-        case 'image/jpeg':
-            $source = imagecreatefromjpeg($file_path);
-            break;
-        case 'image/png':
-            $source = @imagecreatefrompng($file_path);
-            if ($source) {
-                imagepalettetotruecolor($source);
-                imagealphablending($source, true);
-                imagesavealpha($source, true);
-            }
-            break;
-        default:
-            throw new Exception("Unsupported image type: " . $image_info['mime']);
-    }
-    
-    if (!$source) {
-        throw new Exception("Failed to create image resource");
-    }
-    
-    $success = imagewebp($source, $webp_path, $quality);
-    imagedestroy($source);
-    
-    return $success ? $webp_path : false;
 }
 
 // Helper function to convert PHP memory limit to bytes
@@ -1044,6 +1051,42 @@ if (!function_exists('kloudwebp_convert_new_upload')) {
         // Only process JPEG and PNG images
         if (in_array($mime_type, ['image/jpeg', 'image/png'])) {
             kloudwebp_convert_image($file_path);
+        }
+    }
+}
+
+// Function to check available image processing libraries
+if (!function_exists('kloudwebp_check_server_support')) {
+    function kloudwebp_check_server_support() {
+        $support = [];
+
+        // Check Imagick support
+        if (extension_loaded('imagick')) {
+            $imagick = new Imagick();
+            if (in_array('WEBP', $imagick->queryFormats('WEBP'))) {
+                $support[] = 'Imagick';
+            }
+        }
+
+        // Check GD support
+        if (extension_loaded('gd') && function_exists('imagewebp')) {
+            $support[] = 'GD';
+        }
+
+        return $support;
+    }
+}
+
+// Display server support information in the admin area
+add_action('admin_notices', 'kloudwebp_display_server_support');
+
+if (!function_exists('kloudwebp_display_server_support')) {
+    function kloudwebp_display_server_support() {
+        $support = kloudwebp_check_server_support();
+        if (empty($support)) {
+            echo '<div class="notice notice-error"><p>KloudWebP: No supported image processing libraries (Imagick or GD) are available on this server.</p></div>';
+        } else {
+            echo '<div class="notice notice-success"><p>KloudWebP: Supported image processing libraries on this server: ' . implode(', ', $support) . '.</p></div>';
         }
     }
 }
