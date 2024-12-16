@@ -23,46 +23,44 @@ class KloudWebP_Converter {
         }
 
         try {
-            $webp_path = false;
+            $webp_path = $this->get_webp_path($file_path);
+            
             if (extension_loaded('imagick')) {
-                $webp_path = $this->convert_with_imagick($file_path);
+                $success = $this->convert_with_imagick($file_path, $webp_path);
             } elseif (function_exists('imagewebp')) {
-                $webp_path = $this->convert_with_gd($file_path);
+                $success = $this->convert_with_gd($file_path, $webp_path);
             } else {
                 $this->log_error("No suitable image conversion library found");
                 return false;
             }
 
-            if ($webp_path && $update_url) {
+            if ($success && $update_url) {
                 $this->update_attachment_url($file_path, $webp_path);
             }
 
-            return $webp_path;
+            return $success ? $webp_path : false;
         } catch (Exception $e) {
             $this->log_error("Conversion failed: " . $e->getMessage());
             return false;
         }
     }
 
-    private function convert_with_imagick($file_path) {
+    private function convert_with_imagick($file_path, $webp_path) {
         $image = new Imagick($file_path);
         $image->setImageFormat('webp');
         $image->setImageCompressionQuality($this->quality);
         
-        $webp_path = $this->get_webp_path($file_path);
         $success = $image->writeImage($webp_path);
         $image->destroy();
 
-        if ($success) {
-            if (!$this->keep_original) {
-                unlink($file_path);
-            }
-            return $webp_path;
+        if ($success && !$this->keep_original) {
+            @unlink($file_path);
         }
-        return false;
+
+        return $success;
     }
 
-    private function convert_with_gd($file_path) {
+    private function convert_with_gd($file_path, $webp_path) {
         $image_type = wp_check_filetype($file_path)['type'];
         
         switch ($image_type) {
@@ -79,17 +77,14 @@ class KloudWebP_Converter {
                 return false;
         }
 
-        $webp_path = $this->get_webp_path($file_path);
         $success = imagewebp($image, $webp_path, $this->quality);
         imagedestroy($image);
 
-        if ($success) {
-            if (!$this->keep_original) {
-                unlink($file_path);
-            }
-            return $webp_path;
+        if ($success && !$this->keep_original) {
+            @unlink($file_path);
         }
-        return false;
+
+        return $success;
     }
 
     private function get_webp_path($file_path) {

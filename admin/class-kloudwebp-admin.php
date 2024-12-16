@@ -13,17 +13,18 @@ class KloudWebP_Admin {
         // Add action for handling bulk conversion
         add_action('admin_post_kloudwebp_bulk_convert', array($this, 'handle_bulk_convert'));
         
-        // Add filter for handling image uploads
+        // Add filters for handling image uploads
+        add_filter('wp_handle_upload_prefilter', array($this, 'pre_upload'), 10, 1);
         add_filter('wp_handle_upload', array($this, 'handle_upload'), 10, 2);
-        
-        // Add filter for attachment metadata
         add_filter('wp_generate_attachment_metadata', array($this, 'update_attachment_metadata'), 10, 2);
-
-        // Add filter to update mime type
         add_filter('wp_update_attachment_metadata', array($this, 'after_attachment_metadata_update'), 10, 2);
         
         // Add filter for image editor save
         add_filter('wp_image_editors', array($this, 'customize_image_editors'));
+
+        // Add filter for attachment URLs
+        add_filter('wp_get_attachment_url', array($this, 'filter_attachment_url'), 10, 2);
+        add_filter('wp_get_attachment_image_src', array($this, 'filter_attachment_image_src'), 10, 4);
     }
 
     public function add_plugin_admin_menu() {
@@ -174,33 +175,43 @@ class KloudWebP_Admin {
         exit;
     }
 
-    public function handle_upload($upload, $context = 'upload') {
-        // Only process image uploads
-        if (strpos($upload['type'], 'image/') !== 0) {
-            return $upload;
+    public function pre_upload($file) {
+        if (!in_array($file['type'], ['image/jpeg', 'image/png'])) {
+            return $file;
         }
 
-        // Only process JPEG and PNG
+        // Change the filename to .webp before upload
+        $file['name'] = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file['name']);
+        return $file;
+    }
+
+    public function handle_upload($upload, $context = 'upload') {
+        // Only process image uploads
         if (!in_array($upload['type'], ['image/jpeg', 'image/png'])) {
             return $upload;
         }
 
-        // Convert the uploaded image
-        $webp_path = $this->converter->convert_image($upload['file'], true);
-        
-        if ($webp_path && !get_option('kloudwebp_keep_original', true)) {
-            // Update the upload array with WebP information
-            $upload['file'] = $webp_path;
-            $upload['url'] = str_replace(
-                wp_get_upload_dir()['basedir'],
-                wp_get_upload_dir()['baseurl'],
-                $webp_path
-            );
-            $upload['type'] = 'image/webp';
+        // Get file extension
+        $ext = pathinfo($upload['file'], PATHINFO_EXTENSION);
+        if (!in_array(strtolower($ext), ['jpg', 'jpeg', 'png'])) {
+            return $upload;
+        }
 
-            // If original file exists and we're not keeping it, delete it
-            if (file_exists($upload['file']) && !get_option('kloudwebp_keep_original', true)) {
-                @unlink($upload['file']);
+        // Generate WebP filename
+        $webp_file = preg_replace('/\.(jpe?g|png)$/i', '.webp', $upload['file']);
+        $webp_url = preg_replace('/\.(jpe?g|png)$/i', '.webp', $upload['url']);
+
+        // Convert the uploaded image
+        if ($this->converter->convert_image($upload['file'], false)) {
+            // If conversion successful and not keeping original
+            if (!get_option('kloudwebp_keep_original', true)) {
+                // Rename the file to .webp
+                rename($upload['file'], $webp_file);
+                
+                // Update the upload array
+                $upload['file'] = $webp_file;
+                $upload['url'] = $webp_url;
+                $upload['type'] = 'image/webp';
             }
         }
 
@@ -287,6 +298,44 @@ class KloudWebP_Admin {
         }
 
         return $metadata;
+    }
+
+    public function filter_attachment_url($url, $attachment_id) {
+        // Check if this is an image
+        if (!wp_attachment_is_image($attachment_id)) {
+            return $url;
+        }
+
+        // Get the WebP version URL if it exists
+        $webp_url = preg_replace('/\.(jpe?g|png)$/i', '.webp', $url);
+        $file_path = str_replace(wp_get_upload_dir()['baseurl'], wp_get_upload_dir()['basedir'], $webp_url);
+
+        if (file_exists($file_path)) {
+            return $webp_url;
+        }
+
+        return $url;
+    }
+
+    public function filter_attachment_image_src($image, $attachment_id, $size, $icon) {
+        if (!$image) {
+            return $image;
+        }
+
+        // Check if this is an image
+        if (!wp_attachment_is_image($attachment_id)) {
+            return $image;
+        }
+
+        // Get the WebP version URL if it exists
+        $webp_url = preg_replace('/\.(jpe?g|png)$/i', '.webp', $image[0]);
+        $file_path = str_replace(wp_get_upload_dir()['baseurl'], wp_get_upload_dir()['basedir'], $webp_url);
+
+        if (file_exists($file_path)) {
+            $image[0] = $webp_url;
+        }
+
+        return $image;
     }
 
     public function customize_image_editors($editors) {
