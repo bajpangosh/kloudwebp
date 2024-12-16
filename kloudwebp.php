@@ -49,11 +49,19 @@ if (!function_exists('kloudwebp_init_error_log')) {
 }
 
 // Enhanced error logging
-function kloudwebp_log_error($message, $type = 'ERROR') {
-    $log_file = kloudwebp_init_error_log();
-    $timestamp = current_time('mysql');
-    $log_message = sprintf("[%s] [%s] %s\n", $timestamp, $type, $message);
-    error_log($log_message, 3, $log_file);
+if (!function_exists('kloudwebp_log_error')) {
+    function kloudwebp_log_error($message, $type = 'ERROR') {
+        static $log_file = null;
+        if ($log_file === null) {
+            $log_file = KLOUDWEBP_PLUGIN_DIR . 'debug.log';
+            if (!file_exists($log_file)) {
+                touch($log_file);
+            }
+        }
+        $timestamp = current_time('mysql');
+        $log_message = sprintf("[%s] [%s] %s\n", $timestamp, $type, $message);
+        error_log($log_message, 3, $log_file);
+    }
 }
 
 // Add debug logging
@@ -64,26 +72,28 @@ function kloudwebp_log_debug($message) {
 }
 
 // Core WebP Support Functions
-function kloudwebp_browser_supports_webp() {
-    if (!isset($_SERVER['HTTP_ACCEPT'])) {
+if (!function_exists('kloudwebp_browser_supports_webp')) {
+    function kloudwebp_browser_supports_webp() {
+        if (!isset($_SERVER['HTTP_ACCEPT'])) {
+            return false;
+        }
+        
+        if (strpos($_SERVER['HTTP_ACCEPT'], 'image/webp') !== false) {
+            return true;
+        }
+        
+        if (isset($_SERVER['HTTP_USER_AGENT'])) {
+            $ua = $_SERVER['HTTP_USER_AGENT'];
+            if (preg_match('/(Chrome\/[3-9]\d|Chrome\/\d{3,}|OPR\/[2-9]\d|OPR\/\d{3,}|Firefox\/6[5-9]|Firefox\/[7-9]\d|Firefox\/\d{3,})/', $ua)) {
+                return true;
+            }
+            if (preg_match('/Edge\/[1-9]\d|Edge\/\d{3,}/', $ua)) {
+                return true;
+            }
+        }
+        
         return false;
     }
-    
-    if (strpos($_SERVER['HTTP_ACCEPT'], 'image/webp') !== false) {
-        return true;
-    }
-    
-    if (isset($_SERVER['HTTP_USER_AGENT'])) {
-        $ua = $_SERVER['HTTP_USER_AGENT'];
-        if (preg_match('/(Chrome\/[3-9]\d|Chrome\/\d{3,}|OPR\/[2-9]\d|OPR\/\d{3,}|Firefox\/6[5-9]|Firefox\/[7-9]\d|Firefox\/\d{3,})/', $ua)) {
-            return true;
-        }
-        if (preg_match('/Edge\/[1-9]\d|Edge\/\d{3,}/', $ua)) {
-            return true;
-        }
-    }
-    
-    return false;
 }
 
 function kloudwebp_get_webp_path($file_path) {
@@ -1013,30 +1023,32 @@ function wp_convert_hr_to_bytes($size) {
 }
 
 // Initialize Plugin
-function kloudwebp_init() {
-    // Remove all existing filters to prevent duplicates
-    remove_all_filters('upload_mimes');
-    remove_all_filters('wp_get_attachment_url');
-    remove_all_filters('wp_get_attachment_image_src');
-    remove_all_filters('wp_calculate_image_srcset');
-    remove_all_filters('wp_get_attachment_image_attributes');
-    remove_all_filters('file_is_displayable_image');
-    remove_all_filters('the_content');
-    remove_all_filters('wp_get_attachment_metadata');
+if (!function_exists('kloudwebp_init')) {
+    function kloudwebp_init() {
+        // Remove all existing filters to prevent duplicates
+        remove_all_filters('upload_mimes');
+        remove_all_filters('wp_get_attachment_url');
+        remove_all_filters('wp_get_attachment_image_src');
+        remove_all_filters('wp_calculate_image_srcset');
+        remove_all_filters('wp_get_attachment_image_attributes');
+        remove_all_filters('file_is_displayable_image');
+        remove_all_filters('the_content');
+        remove_all_filters('wp_get_attachment_metadata');
 
-    // Add filters only once
-    add_filter('upload_mimes', 'kloudwebp_mime_types');
-    add_filter('wp_get_attachment_url', 'kloudwebp_modify_image_url', 10, 2);
-    add_filter('wp_get_attachment_image_src', 'kloudwebp_modify_image_src', 10, 4);
-    add_filter('wp_calculate_image_srcset', 'kloudwebp_modify_image_srcset', 10, 5);
-    add_filter('wp_get_attachment_image_attributes', 'kloudwebp_modify_image_attributes', 10, 3);
-    add_filter('file_is_displayable_image', 'kloudwebp_displayable_image', 10, 2);
-    add_filter('the_content', 'kloudwebp_replace_content_images', 999);
-    add_filter('wp_get_attachment_metadata', 'kloudwebp_update_attachment_metadata', 10, 2);
-    
-    // Register the admin settings page
-    add_action('admin_menu', 'kloudwebp_admin_menu');
-    add_action('admin_init', 'kloudwebp_register_settings');
+        // Add filters only once
+        add_filter('upload_mimes', 'kloudwebp_mime_types');
+        add_filter('wp_get_attachment_url', 'kloudwebp_modify_image_url', 10, 2);
+        add_filter('wp_get_attachment_image_src', 'kloudwebp_modify_image_src', 10, 4);
+        add_filter('wp_calculate_image_srcset', 'kloudwebp_modify_image_srcset', 10, 5);
+        add_filter('wp_get_attachment_image_attributes', 'kloudwebp_modify_image_attributes', 10, 3);
+        add_filter('file_is_displayable_image', 'kloudwebp_displayable_image', 10, 2);
+        add_filter('the_content', 'kloudwebp_replace_content_images', 999);
+        add_filter('wp_get_attachment_metadata', 'kloudwebp_update_attachment_metadata', 10, 2);
+        
+        // Register the admin settings page
+        add_action('admin_menu', 'kloudwebp_admin_menu');
+        add_action('admin_init', 'kloudwebp_register_settings');
+    }
 }
 
 // Plugin Lifecycle Hooks
