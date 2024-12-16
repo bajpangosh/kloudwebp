@@ -177,6 +177,11 @@ class KloudWebP_Admin {
     }
 
     public function pre_upload($file) {
+        // Check if auto-convert is enabled
+        if (!get_option('kloudwebp_auto_convert', false)) {
+            return $file;
+        }
+
         if (!in_array($file['type'], ['image/jpeg', 'image/png'])) {
             return $file;
         }
@@ -187,6 +192,11 @@ class KloudWebP_Admin {
     }
 
     public function handle_upload($upload, $context = 'upload') {
+        // Check if auto-convert is enabled
+        if (!get_option('kloudwebp_auto_convert', false)) {
+            return $upload;
+        }
+
         // Only process image uploads
         if (!in_array($upload['type'], ['image/jpeg', 'image/png'])) {
             return $upload;
@@ -220,6 +230,11 @@ class KloudWebP_Admin {
     }
 
     public function update_attachment_metadata($metadata, $attachment_id) {
+        // Check if auto-convert is enabled
+        if (!get_option('kloudwebp_auto_convert', false)) {
+            return $metadata;
+        }
+
         if (!is_array($metadata) || !isset($metadata['file'])) {
             return $metadata;
         }
@@ -302,6 +317,11 @@ class KloudWebP_Admin {
     }
 
     public function filter_attachment_url($url, $attachment_id) {
+        // Check if auto-convert is enabled
+        if (!get_option('kloudwebp_auto_convert', false)) {
+            return $url;
+        }
+
         // Check if this is an image
         if (!wp_attachment_is_image($attachment_id)) {
             return $url;
@@ -319,6 +339,11 @@ class KloudWebP_Admin {
     }
 
     public function filter_attachment_image_src($image, $attachment_id, $size, $icon) {
+        // Check if auto-convert is enabled
+        if (!get_option('kloudwebp_auto_convert', false)) {
+            return $image;
+        }
+
         if (!$image) {
             return $image;
         }

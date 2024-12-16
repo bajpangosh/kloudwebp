@@ -11,6 +11,11 @@ class KloudWebP_Converter {
     }
 
     public function convert_image($file_path, $update_url = false) {
+        // Check if auto-convert is enabled for automatic processes
+        if ($update_url && !get_option('kloudwebp_auto_convert', false)) {
+            return false;
+        }
+
         if (!file_exists($file_path)) {
             $this->log_error("File not found: $file_path");
             return false;
@@ -98,6 +103,11 @@ class KloudWebP_Converter {
     }
 
     private function update_attachment_url($original_path, $webp_path) {
+        // Check if auto-convert is enabled
+        if (!get_option('kloudwebp_auto_convert', false)) {
+            return false;
+        }
+
         global $wpdb;
         
         // Get the attachment ID based on the original file path
