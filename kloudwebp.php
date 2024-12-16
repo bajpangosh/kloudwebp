@@ -992,14 +992,144 @@ add_filter('the_content', 'kloudwebp_replace_content_images', 999);
 add_filter('wp_get_attachment_metadata', 'kloudwebp_update_attachment_metadata', 10, 2);
 
 // Filter for attachment URLs and image sources
+remove_filter('wp_get_attachment_url', 'kloudwebp_modify_image_url');
+remove_filter('wp_get_attachment_image_src', 'kloudwebp_modify_image_src');
+remove_filter('wp_calculate_image_srcset', 'kloudwebp_modify_image_srcset');
+
 add_filter('wp_get_attachment_url', 'kloudwebp_modify_image_url', 10, 2);
 add_filter('wp_get_attachment_image_src', 'kloudwebp_modify_image_src', 10, 4);
 add_filter('wp_calculate_image_srcset', 'kloudwebp_modify_image_srcset', 10, 5);
 add_filter('wp_get_attachment_image_attributes', 'kloudwebp_modify_image_attributes', 10, 3);
 
-// Add WebP support to WordPress media
-add_filter('upload_mimes', 'kloudwebp_mime_types');
-add_filter('file_is_displayable_image', 'kloudwebp_displayable_image', 10, 2);
+function kloudwebp_modify_image_url($url, $attachment_id) {
+    // Check if browser supports WebP
+    if (!kloudwebp_browser_supports_webp()) {
+        return $url;
+    }
+    
+    // Check if image has been converted to WebP
+    $metadata = wp_get_attachment_metadata($attachment_id);
+    if (!empty($metadata['webp_url'])) {
+        return $metadata['webp_url'];
+    }
+    
+    return $url;
+}
+
+function kloudwebp_modify_image_src($image, $attachment_id, $size, $icon) {
+    if (!$image || !kloudwebp_browser_supports_webp()) {
+        return $image;
+    }
+    
+    $metadata = wp_get_attachment_metadata($attachment_id);
+    
+    // Handle the main image URL
+    if (!empty($metadata['webp_url'])) {
+        $image[0] = $metadata['webp_url'];
+    }
+    
+    // Handle specific size
+    if (!empty($size) && !empty($metadata['sizes'][$size]['webp_url'])) {
+        $image[0] = $metadata['sizes'][$size]['webp_url'];
+    }
+    
+    return $image;
+}
+
+function kloudwebp_modify_image_srcset($sources, $size_array, $image_src, $image_meta, $attachment_id) {
+    if (!kloudwebp_browser_supports_webp()) {
+        return $sources;
+    }
+    
+    foreach ($sources as &$source) {
+        $url = $source['url'];
+        $webp_url = kloudwebp_get_webp_url($url);
+        if ($webp_url !== $url) {
+            $source['url'] = $webp_url;
+        }
+    }
+    
+    return $sources;
+}
+
+function kloudwebp_browser_supports_webp() {
+    if (!isset($_SERVER['HTTP_ACCEPT'])) {
+        return false;
+    }
+    
+    // Check Accept header for image/webp
+    if (strpos($_SERVER['HTTP_ACCEPT'], 'image/webp') !== false) {
+        return true;
+    }
+    
+    // Check common WebP-supporting browsers
+    if (isset($_SERVER['HTTP_USER_AGENT'])) {
+        $ua = $_SERVER['HTTP_USER_AGENT'];
+        
+        // Chrome 32+, Opera 19+, Firefox 65+
+        if (preg_match('/(Chrome\/[3-9]\d|Chrome\/\d{3,}|OPR\/[2-9]\d|OPR\/\d{3,}|Firefox\/6[5-9]|Firefox\/[7-9]\d|Firefox\/\d{3,})/', $ua)) {
+            return true;
+        }
+        
+        // Edge 18+
+        if (preg_match('/Edge\/[1-9]\d|Edge\/\d{3,}/', $ua)) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+function kloudwebp_mime_types($mimes) {
+    $mimes['webp'] = 'image/webp';
+    return $mimes;
+}
+
+function kloudwebp_get_webp_path($file_path) {
+    $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
+    return file_exists($webp_path) ? $webp_path : false;
+}
+
+function kloudwebp_get_webp_url($url) {
+    $file_path = str_replace(wp_get_upload_dir()['baseurl'], wp_get_upload_dir()['basedir'], $url);
+    $webp_path = kloudwebp_get_webp_path($file_path);
+    return $webp_path ? preg_replace('/\.(jpe?g|png)$/i', '.webp', $url) : $url;
+}
+
+// Add WebP version information to attachment details
+add_filter('wp_prepare_attachment_for_js', 'kloudwebp_attachment_for_js', 10, 3);
+function kloudwebp_attachment_for_js($response, $attachment, $meta) {
+    if (!empty($meta['webp_path'])) {
+        $response['webp'] = array(
+            'path' => $meta['webp_path'],
+            'url' => $meta['webp_url'],
+            'size' => $meta['webp_size']
+        );
+        
+        if (!empty($meta['sizes'])) {
+            foreach ($meta['sizes'] as $size => $size_data) {
+                if (!empty($size_data['webp_path'])) {
+                    $response['sizes'][$size]['webp'] = array(
+                        'path' => $size_data['webp_path'],
+                        'url' => $size_data['webp_url']
+                    );
+                }
+            }
+        }
+    }
+    return $response;
+}
+
+// Ensure WebP images are properly handled in the media library
+add_filter('ajax_query_attachments_args', 'kloudwebp_ajax_query_attachments_args');
+function kloudwebp_ajax_query_attachments_args($query) {
+    if (!empty($query['post_mime_type']) && is_array($query['post_mime_type'])) {
+        if (in_array('image/jpeg', $query['post_mime_type']) || in_array('image/png', $query['post_mime_type'])) {
+            $query['post_mime_type'][] = 'image/webp';
+        }
+    }
+    return $query;
+}
 
 function kloudwebp_update_attachment_metadata($metadata, $attachment_id) {
     if (!is_array($metadata)) {
@@ -1114,50 +1244,4 @@ function kloudwebp_displayable_image($result, $path) {
         return true;
     }
     return $result;
-}
-
-function kloudwebp_get_webp_path($file_path) {
-    $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
-    return file_exists($webp_path) ? $webp_path : false;
-}
-
-function kloudwebp_get_webp_url($url) {
-    $file_path = str_replace(wp_get_upload_dir()['baseurl'], wp_get_upload_dir()['basedir'], $url);
-    $webp_path = kloudwebp_get_webp_path($file_path);
-    return $webp_path ? preg_replace('/\.(jpe?g|png)$/i', '.webp', $url) : $url;
-}
-
-// Add WebP version information to attachment details
-add_filter('wp_prepare_attachment_for_js', 'kloudwebp_attachment_for_js', 10, 3);
-function kloudwebp_attachment_for_js($response, $attachment, $meta) {
-    if (!empty($meta['webp_path'])) {
-        $response['webp'] = array(
-            'path' => $meta['webp_path'],
-            'url' => $meta['webp_url'],
-            'size' => $meta['webp_size']
-        );
-        
-        if (!empty($meta['sizes'])) {
-            foreach ($meta['sizes'] as $size => $size_data) {
-                if (!empty($size_data['webp_path'])) {
-                    $response['sizes'][$size]['webp'] = array(
-                        'path' => $size_data['webp_path'],
-                        'url' => $size_data['webp_url']
-                    );
-                }
-            }
-        }
-    }
-    return $response;
-}
-
-// Ensure WebP images are properly handled in the media library
-add_filter('ajax_query_attachments_args', 'kloudwebp_ajax_query_attachments_args');
-function kloudwebp_ajax_query_attachments_args($query) {
-    if (!empty($query['post_mime_type']) && is_array($query['post_mime_type'])) {
-        if (in_array('image/jpeg', $query['post_mime_type']) || in_array('image/png', $query['post_mime_type'])) {
-            $query['post_mime_type'][] = 'image/webp';
-        }
-    }
-    return $query;
 }
