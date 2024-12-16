@@ -49,58 +49,129 @@ class KloudWebP_Admin {
         );
 
         add_settings_section(
-            'kloudwebp_main_section',
-            'General Settings',
-            null,
+            'kloudwebp_general_settings',
+            __('General Settings', 'kloudwebp'),
+            array($this, 'render_settings_section'),
             'kloudwebp_settings'
         );
 
         add_settings_field(
-            'kloudwebp_auto_convert',
-            'Auto Convert',
+            'auto_convert',
+            __('Auto Convert Images', 'kloudwebp'),
             array($this, 'render_auto_convert_field'),
             'kloudwebp_settings',
-            'kloudwebp_main_section'
+            'kloudwebp_general_settings'
         );
 
         add_settings_field(
-            'kloudwebp_keep_original',
-            'Keep Original',
+            'keep_original',
+            __('Keep Original Images', 'kloudwebp'),
             array($this, 'render_keep_original_field'),
             'kloudwebp_settings',
-            'kloudwebp_main_section'
+            'kloudwebp_general_settings'
         );
+
+        add_settings_field(
+            'quality',
+            __('WebP Quality', 'kloudwebp'),
+            array($this, 'render_quality_field'),
+            'kloudwebp_settings',
+            'kloudwebp_general_settings'
+        );
+    }
+
+    public function render_settings_section() {
+        echo '<p>' . __('Configure how KloudWebP handles image conversion.', 'kloudwebp') . '</p>';
+    }
+
+    public function render_auto_convert_field() {
+        $options = get_option('kloudwebp_settings');
+        $auto_convert = isset($options['auto_convert']) ? $options['auto_convert'] : 1;
+        ?>
+        <label>
+            <input type="checkbox" name="kloudwebp_settings[auto_convert]" value="1" <?php checked(1, $auto_convert); ?>>
+            <?php _e('Automatically convert images to WebP upon upload', 'kloudwebp'); ?>
+        </label>
+        <p class="description">
+            <?php _e('When enabled, images will be automatically converted to WebP format when uploaded to the media library.', 'kloudwebp'); ?>
+        </p>
+        <?php
+    }
+
+    public function render_keep_original_field() {
+        $options = get_option('kloudwebp_settings');
+        $keep_original = isset($options['keep_original']) ? $options['keep_original'] : 1;
+        ?>
+        <label>
+            <input type="checkbox" name="kloudwebp_settings[keep_original]" value="1" <?php checked(1, $keep_original); ?>>
+            <?php _e('Keep original images after conversion', 'kloudwebp'); ?>
+        </label>
+        <p class="description">
+            <?php _e('When enabled, original JPEG/PNG files will be kept after converting to WebP. Recommended for compatibility.', 'kloudwebp'); ?>
+        </p>
+        <?php
+    }
+
+    public function render_quality_field() {
+        $options = get_option('kloudwebp_settings');
+        $quality = isset($options['quality']) ? $options['quality'] : 80;
+        ?>
+        <input type="number" 
+               name="kloudwebp_settings[quality]" 
+               value="<?php echo esc_attr($quality); ?>"
+               min="1" 
+               max="100" 
+               step="1">
+        <p class="description">
+            <?php _e('WebP conversion quality (1-100). Higher values mean better quality but larger file size. Default is 80.', 'kloudwebp'); ?>
+        </p>
+        <?php
+    }
+
+    public function sanitize_settings($input) {
+        $sanitized = array();
+        
+        // Auto convert setting
+        $sanitized['auto_convert'] = isset($input['auto_convert']) ? 1 : 0;
+        
+        // Keep original setting
+        $sanitized['keep_original'] = isset($input['keep_original']) ? 1 : 0;
+        
+        // Quality setting
+        $quality = isset($input['quality']) ? intval($input['quality']) : 80;
+        $sanitized['quality'] = min(max($quality, 1), 100); // Ensure between 1 and 100
+        
+        return $sanitized;
     }
 
     public function add_plugin_menu() {
         // Add main menu item
         add_menu_page(
-            'KloudWebP Dashboard',
+            'KloudWebP',
             'KloudWebP',
             'manage_options',
             $this->plugin_name,
-            array($this, 'display_plugin_dashboard_page'),
-            'dashicons-images-alt2',
-            30
+            array($this, 'display_dashboard_page'),
+            'dashicons-images-alt2'
         );
 
         // Add submenu items
         add_submenu_page(
             $this->plugin_name,
-            'KloudWebP Dashboard',
+            'Dashboard',
             'Dashboard',
             'manage_options',
             $this->plugin_name,
-            array($this, 'display_plugin_dashboard_page')
+            array($this, 'display_dashboard_page')
         );
 
         add_submenu_page(
             $this->plugin_name,
-            'KloudWebP Settings',
+            'Settings',
             'Settings',
             'manage_options',
             $this->plugin_name . '-settings',
-            array($this, 'display_plugin_setup_page')
+            array($this, 'display_settings_page')
         );
     }
 
@@ -111,14 +182,12 @@ class KloudWebP_Admin {
         return array_merge($settings_link, $links);
     }
 
-    public function display_plugin_setup_page() {
-        include_once KLOUDWEBP_PLUGIN_DIR . 'admin/partials/kloudwebp-admin-display.php';
+    public function display_dashboard_page() {
+        require_once plugin_dir_path(dirname(__FILE__)) . 'admin/partials/kloudwebp-admin-dashboard.php';
     }
 
-    public function display_plugin_dashboard_page() {
-        // Get statistics
-        $stats = $this->get_conversion_stats();
-        include_once KLOUDWEBP_PLUGIN_DIR . 'admin/partials/kloudwebp-admin-dashboard.php';
+    public function display_settings_page() {
+        require_once plugin_dir_path(dirname(__FILE__)) . 'admin/partials/kloudwebp-admin-settings.php';
     }
 
     private function get_conversion_stats() {
@@ -168,7 +237,7 @@ class KloudWebP_Admin {
     }
 
     public function convert_uploaded_image($metadata, $attachment_id) {
-        if (!get_option('kloudwebp_auto_convert', false)) {
+        if (!get_option('kloudwebp_settings', array())['auto_convert']) {
             return $metadata;
         }
 
@@ -182,7 +251,7 @@ class KloudWebP_Admin {
         $webp_path = $this->converter->convert_image($file);
         if ($webp_path) {
             // Update metadata if original was replaced
-            if (!get_option('kloudwebp_keep_original', true)) {
+            if (!get_option('kloudwebp_settings', array())['keep_original']) {
                 $metadata['file'] = wp_relative_upload_path($webp_path);
                 $metadata['mime-type'] = 'image/webp';
             }
@@ -289,7 +358,7 @@ class KloudWebP_Admin {
 
     public function pre_upload($file) {
         // Check if auto-convert is enabled
-        if (!get_option('kloudwebp_auto_convert', false)) {
+        if (!get_option('kloudwebp_settings', array())['auto_convert']) {
             return $file;
         }
 
@@ -304,7 +373,7 @@ class KloudWebP_Admin {
 
     public function handle_upload($upload, $context = 'upload') {
         // Check if auto-convert is enabled
-        if (!get_option('kloudwebp_auto_convert', false)) {
+        if (!get_option('kloudwebp_settings', array())['auto_convert']) {
             return $upload;
         }
 
@@ -326,7 +395,7 @@ class KloudWebP_Admin {
         // Convert the uploaded image
         if ($this->converter->convert_image($upload['file'], false)) {
             // If conversion successful and not keeping original
-            if (!get_option('kloudwebp_keep_original', true)) {
+            if (!get_option('kloudwebp_settings', array())['keep_original']) {
                 // Rename the file to .webp
                 rename($upload['file'], $webp_file);
                 
@@ -342,7 +411,7 @@ class KloudWebP_Admin {
 
     public function update_attachment_metadata($metadata, $attachment_id) {
         // Check if auto-convert is enabled
-        if (!get_option('kloudwebp_auto_convert', false)) {
+        if (!get_option('kloudwebp_settings', array())['auto_convert']) {
             return $metadata;
         }
 
@@ -363,7 +432,7 @@ class KloudWebP_Admin {
         // Convert main image if not already converted
         if (!preg_match('/\.webp$/', $file_path)) {
             $webp_path = $this->converter->convert_image($file_path, true);
-            if ($webp_path && !get_option('kloudwebp_keep_original', true)) {
+            if ($webp_path && !get_option('kloudwebp_settings', array())['keep_original']) {
                 $metadata['file'] = str_replace($upload_dir['basedir'] . '/', '', $webp_path);
                 $metadata['mime-type'] = 'image/webp';
                 
@@ -374,7 +443,7 @@ class KloudWebP_Admin {
                 ));
 
                 // Delete original if not keeping it
-                if (file_exists($file_path) && !get_option('kloudwebp_keep_original', true)) {
+                if (file_exists($file_path) && !get_option('kloudwebp_settings', array())['keep_original']) {
                     @unlink($file_path);
                 }
             }
@@ -389,12 +458,12 @@ class KloudWebP_Admin {
                 
                 if (!preg_match('/\.webp$/', $size_file)) {
                     $size_webp = $this->converter->convert_image($size_file, false);
-                    if ($size_webp && !get_option('kloudwebp_keep_original', true)) {
+                    if ($size_webp && !get_option('kloudwebp_settings', array())['keep_original']) {
                         $metadata['sizes'][$size]['file'] = basename($size_webp);
                         $metadata['sizes'][$size]['mime-type'] = 'image/webp';
                         
                         // Delete original size if not keeping it
-                        if (file_exists($size_file) && !get_option('kloudwebp_keep_original', true)) {
+                        if (file_exists($size_file) && !get_option('kloudwebp_settings', array())['keep_original']) {
                             @unlink($size_file);
                         }
                     }
@@ -407,7 +476,7 @@ class KloudWebP_Admin {
 
     public function filter_attachment_url($url, $attachment_id) {
         // Check if auto-convert is enabled
-        if (!get_option('kloudwebp_auto_convert', false)) {
+        if (!get_option('kloudwebp_settings', array())['auto_convert']) {
             return $url;
         }
 
@@ -429,7 +498,7 @@ class KloudWebP_Admin {
 
     public function filter_attachment_image_src($image, $attachment_id, $size, $icon) {
         // Check if auto-convert is enabled
-        if (!get_option('kloudwebp_auto_convert', false)) {
+        if (!get_option('kloudwebp_settings', array())['auto_convert']) {
             return $image;
         }
 
@@ -481,7 +550,6 @@ class KloudWebP_Admin {
             FROM {$wpdb->posts} 
             WHERE post_type IN ('post', 'page') 
             AND post_status = 'publish'
-            ORDER BY post_modified DESC
         ");
 
         $results = array();
@@ -738,100 +806,81 @@ class KloudWebP_Admin {
     }
 
     /**
-     * Render the auto convert field
-     */
-    public function render_auto_convert_field() {
-        $options = get_option('kloudwebp_settings', array());
-        $auto_convert = isset($options['auto_convert']) ? $options['auto_convert'] : false;
-        ?>
-        <label>
-            <input type="checkbox" name="kloudwebp_settings[auto_convert]" value="1" <?php checked(1, $auto_convert); ?>>
-            Automatically convert new image uploads to WebP
-        </label>
-        <p class="description">When enabled, JPEG and PNG images will be automatically converted to WebP format upon upload.</p>
-        <?php
-    }
-
-    /**
-     * Render the keep original field
-     */
-    public function render_keep_original_field() {
-        $options = get_option('kloudwebp_settings', array());
-        $keep_original = isset($options['keep_original']) ? $options['keep_original'] : true;
-        ?>
-        <label>
-            <input type="checkbox" name="kloudwebp_settings[keep_original]" value="1" <?php checked(1, $keep_original); ?>>
-            Keep original images after conversion
-        </label>
-        <p class="description">If enabled, original JPEG and PNG files will be kept after converting to WebP.</p>
-        <?php
-    }
-
-    /**
-     * Sanitize settings
-     */
-    public function sanitize_settings($input) {
-        $sanitized = array();
-        
-        $sanitized['auto_convert'] = isset($input['auto_convert']) ? 1 : 0;
-        $sanitized['keep_original'] = isset($input['keep_original']) ? 1 : 0;
-        
-        return $sanitized;
-    }
-
-    /**
      * Get total count of images in media library
      */
-    private function get_total_images_count() {
+    public function get_total_images_count($post_id = null) {
         global $wpdb;
-        
-        $count = $wpdb->get_var(
-            "SELECT COUNT(*) FROM $wpdb->posts 
-            WHERE post_type = 'attachment' 
-            AND post_mime_type IN ('image/jpeg', 'image/png', 'image/webp')"
-        );
-        
-        return (int) $count;
+
+        if ($post_id) {
+            // Get images from post content
+            $post = get_post($post_id);
+            if (!$post) return 0;
+
+            $content = $post->post_content;
+            preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $content, $matches);
+            return count($matches[2]);
+        } else {
+            // Get all images from media library
+            $query = "SELECT COUNT(*) FROM $wpdb->posts WHERE post_type = 'attachment' 
+                     AND (post_mime_type LIKE 'image/jpeg' OR post_mime_type LIKE 'image/png')";
+            return (int) $wpdb->get_var($query);
+        }
     }
 
     /**
-     * Get count of images converted to WebP
+     * Get converted images count for a specific post or all posts
      */
-    private function get_converted_images_count() {
+    public function get_converted_images_count($post_id = null) {
         global $wpdb;
-        
-        $count = $wpdb->get_var(
-            "SELECT COUNT(*) FROM $wpdb->posts 
-            WHERE post_type = 'attachment' 
-            AND post_mime_type = 'image/webp'"
-        );
-        
-        return (int) $count;
+
+        if ($post_id) {
+            // Get converted images from post content
+            $post = get_post($post_id);
+            if (!$post) return 0;
+
+            $content = $post->post_content;
+            preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+\.webp)/', $content, $matches);
+            return count($matches[2]);
+        } else {
+            // Get all converted images
+            $upload_dir = wp_upload_dir();
+            $webp_files = glob($upload_dir['basedir'] . '/**/*.webp');
+            return count($webp_files);
+        }
     }
 
     /**
-     * Calculate total space saved by WebP conversion
+     * Get total space saved by WebP conversion
      */
-    private function get_total_space_saved() {
-        global $wpdb;
-        
-        $attachments = $wpdb->get_results(
-            "SELECT ID, meta_value FROM $wpdb->posts p
-            JOIN $wpdb->postmeta pm ON p.ID = pm.post_id
-            WHERE post_type = 'attachment'
-            AND post_mime_type = 'image/webp'
-            AND meta_key = '_wp_attachment_metadata'"
-        );
-
+    public function get_total_space_saved() {
+        $upload_dir = wp_upload_dir();
+        $webp_files = glob($upload_dir['basedir'] . '/**/*.webp');
         $total_saved = 0;
-        
-        foreach ($attachments as $attachment) {
-            $metadata = maybe_unserialize($attachment->meta_value);
-            if (!empty($metadata['original_size']) && !empty($metadata['filesize'])) {
-                $total_saved += ($metadata['original_size'] - $metadata['filesize']);
+
+        foreach ($webp_files as $webp_file) {
+            // Get original file path
+            $original_file = preg_replace('/\.webp$/', '', $webp_file);
+            if (file_exists($original_file)) {
+                $original_size = filesize($original_file);
+                $webp_size = filesize($webp_file);
+                $total_saved += max(0, $original_size - $webp_size);
             }
         }
-        
+
         return $total_saved;
+    }
+
+    /**
+     * Get posts and pages with their conversion status
+     */
+    public function get_posts_conversion_status() {
+        $args = array(
+            'post_type' => array('post', 'page'),
+            'posts_per_page' => -1,
+            'post_status' => 'publish'
+        );
+
+        $query = new WP_Query($args);
+        return $query->posts;
     }
 }
