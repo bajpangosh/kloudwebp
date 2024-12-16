@@ -117,12 +117,23 @@ function kloudwebp_modify_image_url($url, $attachment_id) {
     if (!kloudwebp_browser_supports_webp()) {
         return $url;
     }
-    
+
     $metadata = wp_get_attachment_metadata($attachment_id);
     if (!empty($metadata['webp_url'])) {
         return $metadata['webp_url'];
     }
-    
+
+    // Check if WebP version exists
+    $file_path = get_attached_file($attachment_id);
+    if (!$file_path) {
+        return $url;
+    }
+
+    $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
+    if (file_exists($webp_path)) {
+        return str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $webp_path);
+    }
+
     return $url;
 }
 
@@ -130,17 +141,20 @@ function kloudwebp_modify_image_src($image, $attachment_id, $size, $icon) {
     if (!$image || !kloudwebp_browser_supports_webp()) {
         return $image;
     }
-    
+
     $metadata = wp_get_attachment_metadata($attachment_id);
     
+    // Check for size-specific WebP URL
+    if (!empty($size) && !empty($metadata['sizes'][$size]['webp_url'])) {
+        $image[0] = $metadata['sizes'][$size]['webp_url'];
+        return $image;
+    }
+    
+    // Check for full-size WebP URL
     if (!empty($metadata['webp_url'])) {
         $image[0] = $metadata['webp_url'];
     }
-    
-    if (!empty($size) && !empty($metadata['sizes'][$size]['webp_url'])) {
-        $image[0] = $metadata['sizes'][$size]['webp_url'];
-    }
-    
+
     return $image;
 }
 
@@ -148,15 +162,18 @@ function kloudwebp_modify_image_srcset($sources, $size_array, $image_src, $image
     if (!kloudwebp_browser_supports_webp()) {
         return $sources;
     }
-    
+
     foreach ($sources as &$source) {
         $url = $source['url'];
-        $webp_url = kloudwebp_get_webp_url($url);
-        if ($webp_url !== $url) {
-            $source['url'] = $webp_url;
+        $file_path = str_replace(wp_get_upload_dir()['baseurl'], wp_get_upload_dir()['basedir'], $url);
+        $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
+        
+        if (file_exists($webp_path)) {
+            $source['url'] = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $webp_path);
+            $source['mime-type'] = 'image/webp';
         }
     }
-    
+
     return $sources;
 }
 
@@ -899,7 +916,7 @@ function kloudwebp_update_attachment_metadata($metadata, $attachment_id) {
     $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file);
     if (file_exists($webp_path)) {
         $metadata['webp_path'] = $webp_path;
-        $metadata['webp_url'] = preg_replace('/\.(jpe?g|png)$/i', '.webp', wp_get_attachment_url($attachment_id));
+        $metadata['webp_url'] = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $webp_path);
         $metadata['webp_size'] = filesize($webp_path);
         
         // Add WebP versions for all image sizes
@@ -909,7 +926,7 @@ function kloudwebp_update_attachment_metadata($metadata, $attachment_id) {
                 $size_webp = preg_replace('/\.(jpe?g|png)$/i', '.webp', $size_file);
                 if (file_exists($size_webp)) {
                     $metadata['sizes'][$size]['webp_path'] = $size_webp;
-                    $metadata['sizes'][$size]['webp_url'] = preg_replace('/\.(jpe?g|png)$/i', '.webp', dirname($metadata['webp_url']) . '/' . basename($size_data['file']));
+                    $metadata['sizes'][$size]['webp_url'] = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $size_webp);
                 }
             }
         }
@@ -938,9 +955,19 @@ function kloudwebp_handle_upload($file) {
             return $file;
         }
 
-        // Simple conversion without resizing for now
+        // Convert to WebP
         if (file_exists($file['file'])) {
-            kloudwebp_convert_image($file['file']);
+            kloudwebp_log_debug("Converting uploaded file: " . $file['file']);
+            $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file['file']);
+            
+            if (kloudwebp_convert_image($file['file'])) {
+                kloudwebp_log_debug("Successfully converted to: " . $webp_path);
+                
+                // Update file information for WordPress
+                $file['type'] = 'image/webp';
+                $file['webp_path'] = $webp_path;
+                $file['url'] = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $webp_path);
+            }
         }
 
         return $file;
@@ -975,6 +1002,260 @@ if (!function_exists('kloudwebp_convert_new_upload')) {
             }
 
             kloudwebp_log_debug("Processing new attachment: " . $file);
+            
+            // Convert to WebP
+            $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file);
+            if (kloudwebp_convert_image($file)) {
+                // Update attachment metadata
+                $metadata = wp_get_attachment_metadata($post_ID);
+                if (!is_array($metadata)) {
+                    $metadata = array();
+                }
+                
+                // Add WebP information
+                $metadata['webp_path'] = $webp_path;
+                $metadata['webp_url'] = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $webp_path);
+                
+                // Update mime type
+                wp_update_post(array(
+                    'ID' => $post_ID,
+                    'post_mime_type' => 'image/webp'
+                ));
+                
+                // Update metadata
+                wp_update_attachment_metadata($post_ID, $metadata);
+                
+                // Update attachment URL
+                update_post_meta($post_ID, '_wp_attached_file', str_replace(wp_get_upload_dir()['basedir'] . '/', '', $webp_path));
+                
+                kloudwebp_log_debug("Successfully updated attachment metadata for WebP: " . $webp_path);
+            }
+
+        } catch (Exception $e) {
+            kloudwebp_log_error("Error in new upload conversion: " . $e->getMessage());
+        }
+    }
+}
+
+// Function to update attachment metadata
+if (!function_exists('kloudwebp_update_attachment_metadata')) {
+    function kloudwebp_update_attachment_metadata($metadata, $attachment_id) {
+        if (!is_array($metadata)) {
+            return $metadata;
+        }
+
+        // Check if this is an image attachment
+        $file = get_attached_file($attachment_id);
+        if (!$file) {
+            return $metadata;
+        }
+
+        // Get WebP path if exists
+        $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file);
+        if (file_exists($webp_path)) {
+            $metadata['webp_path'] = $webp_path;
+            $metadata['webp_url'] = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $webp_path);
+            
+            // Also update thumbnails if they exist
+            if (!empty($metadata['sizes'])) {
+                foreach ($metadata['sizes'] as $size => $data) {
+                    $thumb_path = str_replace(basename($file), $data['file'], $file);
+                    $thumb_webp = preg_replace('/\.(jpe?g|png)$/i', '.webp', $thumb_path);
+                    if (file_exists($thumb_webp)) {
+                        $metadata['sizes'][$size]['webp_path'] = $thumb_webp;
+                        $metadata['sizes'][$size]['webp_url'] = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $thumb_webp);
+                        $metadata['sizes'][$size]['mime-type'] = 'image/webp';
+                    }
+                }
+            }
+        }
+
+        return $metadata;
+    }
+}
+
+// Add filter for attachment metadata
+add_filter('wp_generate_attachment_metadata', 'kloudwebp_update_attachment_metadata', 10, 2);
+
+// Plugin Lifecycle Hooks
+register_activation_hook(__FILE__, 'kloudwebp_activate');
+register_deactivation_hook(__FILE__, 'kloudwebp_deactivate');
+add_action('init', 'kloudwebp_init');
+
+// Register AJAX handlers
+add_action('wp_ajax_kloudwebp_convert_images', 'kloudwebp_ajax_convert_images');
+add_action('wp_ajax_kloudwebp_get_progress', 'kloudwebp_ajax_get_progress');
+add_action('wp_ajax_kloudwebp_clear_cache', 'kloudwebp_ajax_clear_cache');
+add_action('wp_ajax_kloudwebp_regenerate_thumbnails', 'kloudwebp_ajax_regenerate_thumbnails');
+
+function kloudwebp_ajax_convert_images() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+
+    $results = kloudwebp_process_images();
+    wp_send_json_success($results);
+}
+
+// Enqueue scripts
+if (!function_exists('kloudwebp_enqueue_scripts')) {
+    function kloudwebp_enqueue_scripts() {
+        wp_enqueue_script(
+            'kloudwebp-admin',
+            plugins_url('js/admin.js', __FILE__),
+            array('jquery'),
+            KLOUDWEBP_VERSION,
+            true
+        );
+
+        wp_localize_script('kloudwebp-admin', 'kloudwebpAjax', array(
+            'ajaxurl' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('kloudwebp-ajax-nonce')
+        ));
+    }
+}
+add_action('admin_enqueue_scripts', 'kloudwebp_enqueue_scripts');
+
+// Add upload hooks
+add_filter('wp_handle_upload', 'kloudwebp_handle_upload', 10, 1);
+add_action('add_attachment', 'kloudwebp_convert_new_upload');
+
+// Add AJAX handlers
+add_action('wp_ajax_kloudwebp_convert', 'kloudwebp_ajax_convert');
+add_action('wp_ajax_nopriv_kloudwebp_convert', 'kloudwebp_ajax_convert');
+
+// AJAX conversion handler
+if (!function_exists('kloudwebp_ajax_convert')) {
+    function kloudwebp_ajax_convert() {
+        try {
+            // Verify nonce
+            if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'kloudwebp-ajax-nonce')) {
+                wp_send_json_error('Invalid security token');
+            }
+
+            // Get the attachment ID
+            $attachment_id = isset($_POST['attachment_id']) ? intval($_POST['attachment_id']) : 0;
+            if (!$attachment_id) {
+                wp_send_json_error('Invalid attachment ID');
+            }
+
+            // Get file path
+            $file_path = get_attached_file($attachment_id);
+            if (!$file_path || !file_exists($file_path)) {
+                wp_send_json_error('File not found');
+            }
+
+            // Convert image
+            if (kloudwebp_convert_image($file_path)) {
+                wp_send_json_success('Image converted successfully');
+            } else {
+                wp_send_json_error('Conversion failed');
+            }
+
+        } catch (Exception $e) {
+            wp_send_json_error($e->getMessage());
+        }
+    }
+}
+
+// Initialize Plugin
+if (!function_exists('kloudwebp_init')) {
+    function kloudwebp_init() {
+        // Register MIME types
+        add_filter('upload_mimes', 'kloudwebp_mime_types');
+        
+        // Register upload handlers
+        remove_filter('wp_handle_upload', 'kloudwebp_handle_upload');
+        remove_action('add_attachment', 'kloudwebp_convert_new_upload');
+        add_filter('wp_handle_upload', 'kloudwebp_handle_upload', 20, 1);
+        add_action('add_attachment', 'kloudwebp_convert_new_upload', 20);
+        
+        // Register image filters
+        add_filter('wp_get_attachment_url', 'kloudwebp_modify_image_url', 10, 2);
+        add_filter('wp_get_attachment_image_src', 'kloudwebp_modify_image_src', 10, 4);
+        add_filter('wp_calculate_image_srcset', 'kloudwebp_modify_image_srcset', 10, 5);
+        add_filter('wp_get_attachment_image_attributes', 'kloudwebp_modify_image_attributes', 10, 3);
+        
+        // Register AJAX handlers
+        add_action('wp_ajax_kloudwebp_convert_images', 'kloudwebp_ajax_convert_images');
+        add_action('wp_ajax_kloudwebp_get_progress', 'kloudwebp_ajax_get_progress');
+        add_action('wp_ajax_kloudwebp_clear_cache', 'kloudwebp_ajax_clear_cache');
+        add_action('wp_ajax_kloudwebp_regenerate_thumbnails', 'kloudwebp_ajax_regenerate_thumbnails');
+        
+        // Admin hooks
+        if (is_admin()) {
+            add_action('admin_menu', 'kloudwebp_admin_menu');
+            add_action('admin_init', 'kloudwebp_register_settings');
+            add_action('admin_enqueue_scripts', 'kloudwebp_enqueue_scripts');
+            add_action('admin_notices', 'kloudwebp_display_server_support');
+        }
+    }
+}
+
+// Plugin activation
+if (!function_exists('kloudwebp_activate')) {
+    function kloudwebp_activate() {
+        // Set default options
+        $default_options = array(
+            'conversion_quality' => 80,
+            'auto_convert' => 'yes',
+            'max_width' => 2560,
+            'max_height' => 2560
+        );
+        
+        add_option('kloudwebp_options', $default_options);
+        
+        // Initialize error log
+        kloudwebp_init_error_log();
+        
+        // Flush rewrite rules
+        flush_rewrite_rules();
+    }
+}
+
+// Plugin deactivation
+if (!function_exists('kloudwebp_deactivate')) {
+    function kloudwebp_deactivate() {
+        // Clean up WebP files if needed
+        $options = get_option('kloudwebp_options');
+        if (isset($options['cleanup_on_deactivate']) && $options['cleanup_on_deactivate']) {
+            kloudwebp_cleanup_files();
+        }
+        
+        // Flush rewrite rules
+        flush_rewrite_rules();
+    }
+}
+
+// Register hooks only once at the bottom of the file
+register_activation_hook(__FILE__, 'kloudwebp_activate');
+register_deactivation_hook(__FILE__, 'kloudwebp_deactivate');
+add_action('init', 'kloudwebp_init');
+
+// Function to convert new uploads
+if (!function_exists('kloudwebp_convert_new_upload')) {
+    function kloudwebp_convert_new_upload($post_ID) {
+        try {
+            $file = get_attached_file($post_ID);
+            if (!$file || !file_exists($file)) {
+                return;
+            }
+
+            $mime_type = get_post_mime_type($post_ID);
+            if (!in_array($mime_type, array('image/jpeg', 'image/png'))) {
+                return;
+            }
+
+            $options = get_option('kloudwebp_options', array(
+                'conversion_quality' => 80,
+                'auto_convert' => 'yes'
+            ));
+
+            if ($options['auto_convert'] !== 'yes') {
+                return;
+            }
+
+            kloudwebp_log_debug("Processing new attachment: " . $file);
             kloudwebp_convert_image($file);
 
         } catch (Exception $e) {
@@ -983,11 +1264,91 @@ if (!function_exists('kloudwebp_convert_new_upload')) {
     }
 }
 
-// Add upload hooks with lower priority to ensure file exists
-remove_filter('wp_handle_upload', 'kloudwebp_handle_upload');
-remove_action('add_attachment', 'kloudwebp_convert_new_upload');
-add_filter('wp_handle_upload', 'kloudwebp_handle_upload', 20, 1);
-add_action('add_attachment', 'kloudwebp_convert_new_upload', 20);
+// Function to handle image upload
+if (!function_exists('kloudwebp_handle_upload')) {
+    function kloudwebp_handle_upload($file) {
+        try {
+            if (!isset($file['type']) || !isset($file['file'])) {
+                return $file;
+            }
+
+            // Check if it's an image we can handle
+            if (!in_array($file['type'], array('image/jpeg', 'image/png'))) {
+                return $file;
+            }
+
+            $options = get_option('kloudwebp_options', array(
+                'conversion_quality' => 80,
+                'auto_convert' => 'yes'
+            ));
+
+            if ($options['auto_convert'] !== 'yes') {
+                return $file;
+            }
+
+            // Convert to WebP
+            if (file_exists($file['file'])) {
+                kloudwebp_log_debug("Converting uploaded file: " . $file['file']);
+                $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file['file']);
+                
+                if (kloudwebp_convert_image($file['file'])) {
+                    kloudwebp_log_debug("Successfully converted to: " . $webp_path);
+                    
+                    // Update file information for WordPress
+                    $file['type'] = 'image/webp';
+                    $file['webp_path'] = $webp_path;
+                    $file['url'] = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $webp_path);
+                }
+            }
+
+            return $file;
+
+        } catch (Exception $e) {
+            kloudwebp_log_error("Upload handler error: " . $e->getMessage());
+            return $file;
+        }
+    }
+}
+
+// Function to update attachment metadata
+if (!function_exists('kloudwebp_update_attachment_metadata')) {
+    function kloudwebp_update_attachment_metadata($metadata, $attachment_id) {
+        if (!is_array($metadata)) {
+            return $metadata;
+        }
+
+        // Check if this is an image attachment
+        $file = get_attached_file($attachment_id);
+        if (!$file) {
+            return $metadata;
+        }
+
+        // Get WebP path if exists
+        $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file);
+        if (file_exists($webp_path)) {
+            $metadata['webp_path'] = $webp_path;
+            $metadata['webp_url'] = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $webp_path);
+            
+            // Also update thumbnails if they exist
+            if (!empty($metadata['sizes'])) {
+                foreach ($metadata['sizes'] as $size => $data) {
+                    $thumb_path = str_replace(basename($file), $data['file'], $file);
+                    $thumb_webp = preg_replace('/\.(jpe?g|png)$/i', '.webp', $thumb_path);
+                    if (file_exists($thumb_webp)) {
+                        $metadata['sizes'][$size]['webp_path'] = $thumb_webp;
+                        $metadata['sizes'][$size]['webp_url'] = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $thumb_webp);
+                        $metadata['sizes'][$size]['mime-type'] = 'image/webp';
+                    }
+                }
+            }
+        }
+
+        return $metadata;
+    }
+}
+
+// Add filter for attachment metadata
+add_filter('wp_generate_attachment_metadata', 'kloudwebp_update_attachment_metadata', 10, 2);
 
 // Utility functions for memory management
 function kloudwebp_check_memory_limit($file_path) {
@@ -1145,159 +1506,3 @@ if (!function_exists('kloudwebp_resize_image')) {
         }
     }
 }
-
-// Plugin Lifecycle Hooks
-register_activation_hook(__FILE__, 'kloudwebp_activate');
-register_deactivation_hook(__FILE__, 'kloudwebp_deactivate');
-add_action('init', 'kloudwebp_init');
-add_action('admin_enqueue_scripts', 'kloudwebp_enqueue_scripts');
-
-// Register AJAX handlers
-add_action('wp_ajax_kloudwebp_convert_images', 'kloudwebp_ajax_convert_images');
-add_action('wp_ajax_kloudwebp_get_progress', 'kloudwebp_ajax_get_progress');
-add_action('wp_ajax_kloudwebp_clear_cache', 'kloudwebp_ajax_clear_cache');
-add_action('wp_ajax_kloudwebp_regenerate_thumbnails', 'kloudwebp_ajax_regenerate_thumbnails');
-
-function kloudwebp_ajax_convert_images() {
-    if (!current_user_can('manage_options')) {
-        wp_send_json_error('Unauthorized');
-    }
-
-    $results = kloudwebp_process_images();
-    wp_send_json_success($results);
-}
-
-// Enqueue scripts
-if (!function_exists('kloudwebp_enqueue_scripts')) {
-    function kloudwebp_enqueue_scripts() {
-        wp_enqueue_script(
-            'kloudwebp-admin',
-            plugins_url('js/admin.js', __FILE__),
-            array('jquery'),
-            KLOUDWEBP_VERSION,
-            true
-        );
-
-        wp_localize_script('kloudwebp-admin', 'kloudwebpAjax', array(
-            'ajaxurl' => admin_url('admin-ajax.php'),
-            'nonce' => wp_create_nonce('kloudwebp-ajax-nonce')
-        ));
-    }
-}
-add_action('admin_enqueue_scripts', 'kloudwebp_enqueue_scripts');
-
-// Add upload hooks
-add_filter('wp_handle_upload', 'kloudwebp_handle_upload', 10, 1);
-add_action('add_attachment', 'kloudwebp_convert_new_upload');
-
-// Add AJAX handlers
-add_action('wp_ajax_kloudwebp_convert', 'kloudwebp_ajax_convert');
-add_action('wp_ajax_nopriv_kloudwebp_convert', 'kloudwebp_ajax_convert');
-
-// AJAX conversion handler
-if (!function_exists('kloudwebp_ajax_convert')) {
-    function kloudwebp_ajax_convert() {
-        try {
-            // Verify nonce
-            if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'kloudwebp-ajax-nonce')) {
-                wp_send_json_error('Invalid security token');
-            }
-
-            // Get the attachment ID
-            $attachment_id = isset($_POST['attachment_id']) ? intval($_POST['attachment_id']) : 0;
-            if (!$attachment_id) {
-                wp_send_json_error('Invalid attachment ID');
-            }
-
-            // Get file path
-            $file_path = get_attached_file($attachment_id);
-            if (!$file_path || !file_exists($file_path)) {
-                wp_send_json_error('File not found');
-            }
-
-            // Convert image
-            if (kloudwebp_convert_image($file_path)) {
-                wp_send_json_success('Image converted successfully');
-            } else {
-                wp_send_json_error('Conversion failed');
-            }
-
-        } catch (Exception $e) {
-            wp_send_json_error($e->getMessage());
-        }
-    }
-}
-
-// Initialize Plugin
-if (!function_exists('kloudwebp_init')) {
-    function kloudwebp_init() {
-        // Register MIME types
-        add_filter('upload_mimes', 'kloudwebp_mime_types');
-        
-        // Register upload handlers
-        remove_filter('wp_handle_upload', 'kloudwebp_handle_upload');
-        remove_action('add_attachment', 'kloudwebp_convert_new_upload');
-        add_filter('wp_handle_upload', 'kloudwebp_handle_upload', 20, 1);
-        add_action('add_attachment', 'kloudwebp_convert_new_upload', 20);
-        
-        // Register image filters
-        add_filter('wp_get_attachment_url', 'kloudwebp_modify_image_url', 10, 2);
-        add_filter('wp_get_attachment_image_src', 'kloudwebp_modify_image_src', 10, 4);
-        add_filter('wp_calculate_image_srcset', 'kloudwebp_modify_image_srcset', 10, 5);
-        add_filter('wp_get_attachment_image_attributes', 'kloudwebp_modify_image_attributes', 10, 3);
-        
-        // Register AJAX handlers
-        add_action('wp_ajax_kloudwebp_convert_images', 'kloudwebp_ajax_convert_images');
-        add_action('wp_ajax_kloudwebp_get_progress', 'kloudwebp_ajax_get_progress');
-        add_action('wp_ajax_kloudwebp_clear_cache', 'kloudwebp_ajax_clear_cache');
-        add_action('wp_ajax_kloudwebp_regenerate_thumbnails', 'kloudwebp_ajax_regenerate_thumbnails');
-        
-        // Admin hooks
-        if (is_admin()) {
-            add_action('admin_menu', 'kloudwebp_admin_menu');
-            add_action('admin_init', 'kloudwebp_register_settings');
-            add_action('admin_enqueue_scripts', 'kloudwebp_enqueue_scripts');
-            add_action('admin_notices', 'kloudwebp_display_server_support');
-        }
-    }
-}
-
-// Plugin activation
-if (!function_exists('kloudwebp_activate')) {
-    function kloudwebp_activate() {
-        // Set default options
-        $default_options = array(
-            'conversion_quality' => 80,
-            'auto_convert' => 'yes',
-            'max_width' => 2560,
-            'max_height' => 2560
-        );
-        
-        add_option('kloudwebp_options', $default_options);
-        
-        // Initialize error log
-        kloudwebp_init_error_log();
-        
-        // Flush rewrite rules
-        flush_rewrite_rules();
-    }
-}
-
-// Plugin deactivation
-if (!function_exists('kloudwebp_deactivate')) {
-    function kloudwebp_deactivate() {
-        // Clean up WebP files if needed
-        $options = get_option('kloudwebp_options');
-        if (isset($options['cleanup_on_deactivate']) && $options['cleanup_on_deactivate']) {
-            kloudwebp_cleanup_files();
-        }
-        
-        // Flush rewrite rules
-        flush_rewrite_rules();
-    }
-}
-
-// Register hooks only once at the bottom of the file
-register_activation_hook(__FILE__, 'kloudwebp_activate');
-register_deactivation_hook(__FILE__, 'kloudwebp_deactivate');
-add_action('init', 'kloudwebp_init');
