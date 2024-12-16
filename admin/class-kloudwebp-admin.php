@@ -37,8 +37,8 @@ class KloudWebP_Admin {
         add_filter('wp_get_attachment_url', array($this, 'filter_attachment_url'), 10, 2);
         add_filter('wp_get_attachment_image_src', array($this, 'filter_attachment_image_src'), 10, 4);
         
-        // Enqueue styles
-        add_action('admin_enqueue_scripts', array($this, 'enqueue_styles'));
+        // Enqueue scripts and styles
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
     }
 
     public function register_settings() {
@@ -420,7 +420,7 @@ class KloudWebP_Admin {
 
         // Get the WebP version URL if it exists
         $webp_url = preg_replace('/\.(jpe?g|png)$/i', '.webp', $url);
-        $file_path = str_replace(wp_get_upload_dir()['baseurl'], wp_get_upload_dir()['basedir'], $webp_url);
+        $file_path = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $webp_url);
 
         if (file_exists($file_path)) {
             return $webp_url;
@@ -446,7 +446,7 @@ class KloudWebP_Admin {
 
         // Get the WebP version URL if it exists
         $webp_url = preg_replace('/\.(jpe?g|png)$/i', '.webp', $image[0]);
-        $file_path = str_replace(wp_get_upload_dir()['baseurl'], wp_get_upload_dir()['basedir'], $webp_url);
+        $file_path = str_replace(wp_get_upload_dir()['basedir'], wp_get_upload_dir()['baseurl'], $webp_url);
 
         if (file_exists($file_path)) {
             $image[0] = $webp_url;
@@ -609,56 +609,96 @@ class KloudWebP_Admin {
             return;
         }
 
-        $results = $this->convert_single_post($post_id);
-        if ($results) {
-            wp_send_json_success($results);
-        } else {
-            wp_send_json_error('Conversion failed');
+        $content = get_post_field('post_content', $post_id);
+        $content_updated = false;
+        $results = array(
+            'success' => 0,
+            'failed' => 0,
+            'skipped' => 0
+        );
+
+        // Find all img tags in the content
+        preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $content, $matches);
+        
+        if (!empty($matches[2])) {
+            foreach ($matches[2] as $url) {
+                // Convert URL to file path
+                $file_path = $this->url_to_path($url);
+                if (!$file_path) {
+                    $results['skipped']++;
+                    continue;
+                }
+
+                // Check if it's a JPEG or PNG
+                if (preg_match('/\.(jpe?g|png)$/i', $file_path) && file_exists($file_path)) {
+                    $webp_path = $this->converter->convert_image($file_path, false);
+                    
+                    if ($webp_path) {
+                        // Get the WebP URL
+                        $webp_url = str_replace(
+                            wp_get_upload_dir()['basedir'],
+                            wp_get_upload_dir()['baseurl'],
+                            $webp_path
+                        );
+
+                        // Update image src in content
+                        $content = str_replace($url, $webp_url, $content);
+                        $content_updated = true;
+                        $results['success']++;
+                    } else {
+                        $results['failed']++;
+                    }
+                } else {
+                    $results['skipped']++;
+                }
+            }
         }
+
+        // Update post content if changed
+        if ($content_updated) {
+            wp_update_post(array(
+                'ID' => $post_id,
+                'post_content' => $content
+            ));
+        }
+
+        wp_send_json_success($results);
     }
 
     /**
-     * Display admin notices for conversion results
+     * Enqueue admin scripts and styles
      */
-    public function admin_notices() {
-        if (!isset($_GET['page']) || $_GET['page'] !== $this->plugin_name) {
+    public function enqueue_scripts($hook) {
+        if (strpos($hook, $this->plugin_name) === false) {
             return;
         }
 
-        $messages = array();
-
-        // Handle post conversion messages
-        if (isset($_GET['posts_converted'])) {
-            $messages[] = sprintf(
-                '%d images converted, %d failed, %d skipped. Updated %d posts/pages.',
-                intval($_GET['posts_converted']),
-                intval($_GET['posts_failed']),
-                intval($_GET['posts_skipped']),
-                intval($_GET['updated_posts'])
-            );
-        }
-
-        // Display settings updated message
-        if (isset($_GET['settings-updated']) && $_GET['settings-updated']) {
-            $messages[] = __('Settings saved successfully.');
-        }
-
-        // Display any messages
-        foreach ($messages as $message) {
-            printf(
-                '<div class="notice notice-success is-dismissible"><p>%s</p></div>',
-                esc_html($message)
-            );
-        }
-    }
-
-    public function enqueue_styles() {
         wp_enqueue_style(
             $this->plugin_name,
             plugin_dir_url(__FILE__) . 'css/kloudwebp-admin.css',
             array(),
             $this->version,
             'all'
+        );
+
+        wp_enqueue_script(
+            $this->plugin_name,
+            plugin_dir_url(__FILE__) . 'js/kloudwebp-admin.js',
+            array('jquery'),
+            $this->version,
+            true
+        );
+
+        wp_localize_script(
+            $this->plugin_name,
+            'kloudwebpAjax',
+            array(
+                'ajaxurl' => admin_url('admin-ajax.php'),
+                'nonce' => wp_create_nonce('kloudwebp_convert_post'),
+                'converting' => __('Converting...'),
+                'error' => __('Error'),
+                'success' => __('Converted')
+            )
         );
     }
 
