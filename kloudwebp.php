@@ -240,7 +240,16 @@ function kloudwebp_settings_page() {
 }
 
 function kloudwebp_get_stats() {
-    $total = wp_count_attachments('image')->total;
+    $attachments = wp_count_attachments();
+    $total = 0;
+    
+    // Count total images
+    foreach (array('image/jpeg', 'image/png') as $mime_type) {
+        if (isset($attachments->{$mime_type})) {
+            $total += (int)$attachments->{$mime_type};
+        }
+    }
+    
     $converted = get_option('kloudwebp_converted_count', 0);
     $saved = size_format(get_option('kloudwebp_space_saved', 0), 2);
 
@@ -339,7 +348,17 @@ function kloudwebp_process_batch() {
     );
     
     $attachments = get_posts($args);
-    $total = wp_count_attachments('image')->total;
+    
+    // Get total count
+    $total_args = array(
+        'post_type' => 'attachment',
+        'post_mime_type' => array('image/jpeg', 'image/png'),
+        'posts_per_page' => -1,
+        'fields' => 'ids'
+    );
+    $total_attachments = get_posts($total_args);
+    $total = count($total_attachments);
+    
     $results = array(
         'success' => 0,
         'failed' => 0,
@@ -349,19 +368,28 @@ function kloudwebp_process_batch() {
     
     foreach ($attachments as $attachment) {
         $file_path = get_attached_file($attachment->ID);
+        
+        if (!$file_path || !file_exists($file_path)) {
+            $results['failed']++;
+            continue;
+        }
+        
         $original_size = filesize($file_path);
         $results['total_size_before'] += $original_size;
         
         // Process image
         $webp_path = kloudwebp_convert_image($file_path);
         
-        if ($webp_path) {
+        if ($webp_path && file_exists($webp_path)) {
             $new_size = filesize($webp_path);
             $results['total_size_after'] += $new_size;
             $results['success']++;
             
             // Update attachment metadata
             $metadata = wp_get_attachment_metadata($attachment->ID);
+            if (!is_array($metadata)) {
+                $metadata = array();
+            }
             $metadata['webp_path'] = $webp_path;
             $metadata['original_size'] = $original_size;
             $metadata['webp_size'] = $new_size;
@@ -381,18 +409,26 @@ function kloudwebp_process_batch() {
     }
     
     // Update progress
-    $progress = array(
-        'current' => $offset + count($attachments),
-        'total' => $total,
-        'status' => sprintf(
-            __('Processed %1$d of %2$d images (%3$d%%) - Success: %4$d, Failed: %5$d', 'kloudwebp'),
-            $offset + count($attachments),
-            $total,
-            round(($offset + count($attachments)) / $total * 100),
-            $results['success'],
-            $results['failed']
-        )
-    );
+    if ($total > 0) {
+        $progress = array(
+            'current' => $offset + count($attachments),
+            'total' => $total,
+            'status' => sprintf(
+                __('Processed %1$d of %2$d images (%3$d%%) - Success: %4$d, Failed: %5$d', 'kloudwebp'),
+                $offset + count($attachments),
+                $total,
+                round(($offset + count($attachments)) / $total * 100),
+                $results['success'],
+                $results['failed']
+            )
+        );
+    } else {
+        $progress = array(
+            'current' => 0,
+            'total' => 0,
+            'status' => __('No images found to process', 'kloudwebp')
+        );
+    }
     update_option('kloudwebp_conversion_progress', $progress);
     
     // Calculate space savings
@@ -403,6 +439,74 @@ function kloudwebp_process_batch() {
     $results['next_offset'] = $offset + $batch_size;
     
     wp_send_json_success($results);
+}
+
+function kloudwebp_convert_image($file_path) {
+    $options = get_option('kloudwebp_options');
+    $quality = isset($options['conversion_quality']) ? $options['conversion_quality'] : 80;
+    $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
+    
+    // Try Imagick first
+    if (extension_loaded('imagick')) {
+        try {
+            $image = new Imagick($file_path);
+            $image->setImageFormat('webp');
+            $image->setOption('webp:quality', $quality);
+            $success = $image->writeImage($webp_path);
+            $image->clear();
+            $image->destroy();
+            
+            if ($success) {
+                return $webp_path;
+            }
+        } catch (Exception $e) {
+            kloudwebp_log_error("Imagick error: " . $e->getMessage());
+        }
+    }
+    
+    // Fallback to GD if Imagick fails or is not available
+    if (extension_loaded('gd')) {
+        try {
+            $image_info = getimagesize($file_path);
+            if (!$image_info) {
+                throw new Exception("Unable to get image information");
+            }
+            
+            $source = null;
+            switch ($image_info['mime']) {
+                case 'image/jpeg':
+                    $source = imagecreatefromjpeg($file_path);
+                    break;
+                case 'image/png':
+                    // Suppress libpng warnings about sRGB profile
+                    @$source = imagecreatefrompng($file_path);
+                    if ($source) {
+                        // Handle PNG transparency
+                        imagepalettetotruecolor($source);
+                        imagealphablending($source, true);
+                        imagesavealpha($source, true);
+                    }
+                    break;
+                default:
+                    throw new Exception("Unsupported image type: " . $image_info['mime']);
+            }
+            
+            if (!$source) {
+                throw new Exception("Failed to create image resource");
+            }
+            
+            $success = imagewebp($source, $webp_path, $quality);
+            imagedestroy($source);
+            
+            if ($success) {
+                return $webp_path;
+            }
+        } catch (Exception $e) {
+            kloudwebp_log_error("GD error: " . $e->getMessage());
+        }
+    }
+    
+    return false;
 }
 
 function kloudwebp_optimize_image_advanced($file_path) {
@@ -523,70 +627,6 @@ function kloudwebp_scan_media_library() {
         'posts_per_page' => -1,
     );
     return get_posts($args);
-}
-
-function kloudwebp_convert_image($image_path) {
-    $options = get_option('kloudwebp_options');
-    $quality = isset($options['conversion_quality']) ? $options['conversion_quality'] : 80;
-    $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $image_path);
-    
-    // Try Imagick first
-    if (extension_loaded('imagick')) {
-        try {
-            $imagick = new Imagick($image_path);
-            $imagick->setImageFormat('webp');
-            $imagick->setOption('webp:quality', $quality);
-            $success = $imagick->writeImage($webp_path);
-            $imagick->clear();
-            $imagick->destroy();
-            
-            if ($success) {
-                return $webp_path;
-            }
-        } catch (Exception $e) {
-            kloudwebp_log_error("Imagick error: " . $e->getMessage());
-        }
-    }
-    
-    // Fallback to GD if Imagick fails or is not available
-    if (extension_loaded('gd')) {
-        try {
-            $image_info = getimagesize($image_path);
-            if (!$image_info) {
-                throw new Exception("Unable to get image information");
-            }
-            
-            switch ($image_info['mime']) {
-                case 'image/jpeg':
-                    $source = imagecreatefromjpeg($image_path);
-                    break;
-                case 'image/png':
-                    $source = imagecreatefrompng($image_path);
-                    // Handle PNG transparency
-                    imagepalettetotruecolor($source);
-                    imagealphablending($source, true);
-                    imagesavealpha($source, true);
-                    break;
-                default:
-                    throw new Exception("Unsupported image type: " . $image_info['mime']);
-            }
-            
-            if (!$source) {
-                throw new Exception("Failed to create image resource");
-            }
-            
-            $success = imagewebp($source, $webp_path, $quality);
-            imagedestroy($source);
-            
-            if ($success) {
-                return $webp_path;
-            }
-        } catch (Exception $e) {
-            kloudwebp_log_error("GD error: " . $e->getMessage());
-        }
-    }
-    
-    return false;
 }
 
 function kloudwebp_process_images() {
