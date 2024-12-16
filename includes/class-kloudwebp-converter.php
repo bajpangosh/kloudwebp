@@ -122,13 +122,19 @@ class KloudWebP_Converter {
         $webp_url = str_replace($upload_dir['basedir'], $upload_dir['baseurl'], $webp_path);
         $original_url = str_replace($upload_dir['basedir'], $upload_dir['baseurl'], $original_path);
 
-        // Update guid if we're replacing the original
+        // Update guid and post mime type if we're replacing the original
         if (!$this->keep_original) {
             $wpdb->update(
                 $wpdb->posts,
-                array('guid' => $webp_url),
+                array(
+                    'guid' => $webp_url,
+                    'post_mime_type' => 'image/webp'
+                ),
                 array('ID' => $attachment_id)
             );
+
+            // Update _wp_attached_file
+            update_post_meta($attachment_id, '_wp_attached_file', str_replace($upload_dir['basedir'] . '/', '', $webp_path));
         }
 
         // Update attachment metadata
@@ -139,6 +145,7 @@ class KloudWebP_Converter {
             
             // Update the main file
             $metadata['file'] = str_replace($old_file, $new_file, $metadata['file']);
+            $metadata['mime-type'] = 'image/webp';
             
             // Update sizes if they exist
             if (!empty($metadata['sizes'])) {
@@ -153,6 +160,9 @@ class KloudWebP_Converter {
             wp_update_attachment_metadata($attachment_id, $metadata);
         }
 
+        // Clear any caches
+        clean_post_cache($attachment_id);
+        
         return true;
     }
 

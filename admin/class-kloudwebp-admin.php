@@ -18,6 +18,12 @@ class KloudWebP_Admin {
         
         // Add filter for attachment metadata
         add_filter('wp_generate_attachment_metadata', array($this, 'update_attachment_metadata'), 10, 2);
+
+        // Add filter to update mime type
+        add_filter('wp_update_attachment_metadata', array($this, 'after_attachment_metadata_update'), 10, 2);
+        
+        // Add filter for image editor save
+        add_filter('wp_image_editors', array($this, 'customize_image_editors'));
     }
 
     public function add_plugin_admin_menu() {
@@ -191,6 +197,11 @@ class KloudWebP_Admin {
                 $webp_path
             );
             $upload['type'] = 'image/webp';
+
+            // If original file exists and we're not keeping it, delete it
+            if (file_exists($upload['file']) && !get_option('kloudwebp_keep_original', true)) {
+                @unlink($upload['file']);
+            }
         }
 
         return $upload;
@@ -216,7 +227,18 @@ class KloudWebP_Admin {
             $webp_path = $this->converter->convert_image($file_path, true);
             if ($webp_path && !get_option('kloudwebp_keep_original', true)) {
                 $metadata['file'] = str_replace($upload_dir['basedir'] . '/', '', $webp_path);
-                wp_update_attachment_metadata($attachment_id, $metadata);
+                $metadata['mime-type'] = 'image/webp';
+                
+                // Update post mime type
+                wp_update_post(array(
+                    'ID' => $attachment_id,
+                    'post_mime_type' => 'image/webp'
+                ));
+
+                // Delete original if not keeping it
+                if (file_exists($file_path) && !get_option('kloudwebp_keep_original', true)) {
+                    @unlink($file_path);
+                }
             }
         }
 
@@ -232,11 +254,46 @@ class KloudWebP_Admin {
                     if ($size_webp && !get_option('kloudwebp_keep_original', true)) {
                         $metadata['sizes'][$size]['file'] = basename($size_webp);
                         $metadata['sizes'][$size]['mime-type'] = 'image/webp';
+                        
+                        // Delete original size if not keeping it
+                        if (file_exists($size_file) && !get_option('kloudwebp_keep_original', true)) {
+                            @unlink($size_file);
+                        }
                     }
                 }
             }
         }
 
         return $metadata;
+    }
+
+    public function after_attachment_metadata_update($metadata, $attachment_id) {
+        if (!is_array($metadata) || !isset($metadata['file'])) {
+            return $metadata;
+        }
+
+        // Check if this is a WebP image
+        if (preg_match('/\.webp$/', $metadata['file'])) {
+            // Update post mime type
+            wp_update_post(array(
+                'ID' => $attachment_id,
+                'post_mime_type' => 'image/webp'
+            ));
+
+            // Update attachment metadata
+            update_post_meta($attachment_id, '_wp_attachment_image_alt', 
+                get_post_meta($attachment_id, '_wp_attachment_image_alt', true)
+            );
+        }
+
+        return $metadata;
+    }
+
+    public function customize_image_editors($editors) {
+        // Ensure WP_Image_Editor_GD is the first choice
+        return array_merge(
+            array('WP_Image_Editor_GD'),
+            $editors
+        );
     }
 }
