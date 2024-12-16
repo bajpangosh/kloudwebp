@@ -27,7 +27,7 @@ class KloudWebP {
         $plugin_admin = new KloudWebP_Admin($this->get_plugin_name(), $this->get_version());
         
         // Add menu items
-        $this->loader->add_action('admin_menu', $plugin_admin, 'add_plugin_admin_menu');
+        $this->loader->add_action('admin_menu', $plugin_admin, 'add_plugin_menu');
         
         // Register settings
         $this->loader->add_action('admin_init', $plugin_admin, 'register_settings');
