@@ -861,15 +861,7 @@ class KloudWebP_Admin {
     /**
      * Register the JavaScript for the admin area.
      */
-    public function enqueue_scripts() {
-        wp_enqueue_script($this->plugin_name, plugin_dir_url(__FILE__) . 'js/kloudwebp-admin.js', array('jquery'), $this->version, false);
-        
-        // Add AJAX URL and nonce for JavaScript
-        wp_localize_script($this->plugin_name, 'kloudwebpAjax', array(
-            'ajaxurl' => admin_url('admin-ajax.php'),
-            'nonce' => wp_create_nonce('kloudwebp_convert_nonce')
-        ));
-    }
+    // Removed duplicate enqueue_scripts() method
 
     /**
      * Handle single post conversion via AJAX
@@ -971,7 +963,7 @@ class KloudWebP_Admin {
         } else {
             preg_match_all('/<img[^>]+>/i', $post->post_content, $img_matches);
             foreach ($img_matches[0] as $img) {
-                preg_match('/src=[\'"]([^\'"]+)[\'"]/i', $img, $src_match);
+                preg_match('/src=[\'"]([^\'"]+)/i', $img, $src_match);
                 if (isset($src_match[1])) {
                     $images[] = $src_match[1];
                 }
