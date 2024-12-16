@@ -936,37 +936,75 @@ function kloudwebp_update_attachment_metadata($metadata, $attachment_id) {
 }
 
 function kloudwebp_handle_upload($file) {
-    $options = get_option('kloudwebp_options');
-    
-    if (!isset($options['auto_convert']) || !$options['auto_convert']) {
+    try {
+        if (!isset($file['type']) || !isset($file['file'])) {
+            return $file;
+        }
+
+        // Check if it's an image we can handle
+        if (!in_array($file['type'], array('image/jpeg', 'image/png'))) {
+            return $file;
+        }
+
+        $options = get_option('kloudwebp_options', array(
+            'conversion_quality' => 80,
+            'auto_convert' => 'yes'
+        ));
+
+        if ($options['auto_convert'] !== 'yes') {
+            return $file;
+        }
+
+        // Simple conversion without resizing for now
+        if (file_exists($file['file'])) {
+            kloudwebp_convert_image($file['file']);
+        }
+
+        return $file;
+
+    } catch (Exception $e) {
+        kloudwebp_log_error("Upload handler error: " . $e->getMessage());
         return $file;
     }
-    
-    if (!in_array($file['type'], array('image/jpeg', 'image/png'))) {
-        return $file;
-    }
-    
-    // Optimize original if enabled
-    if (isset($options['optimize_original']) && $options['optimize_original']) {
-        kloudwebp_optimize_image_advanced($file['file']);
-    }
-    
-    // Resize if needed
-    if (isset($options['max_width']) && $options['max_width'] > 0) {
-        kloudwebp_resize_image($file['file'], $options['max_width']);
-    }
-    
-    // Convert to WebP
-    $webp_path = kloudwebp_convert_image($file['file']);
-    
-    if ($webp_path && isset($options['replace_original']) && $options['replace_original']) {
-        unlink($file['file']);
-        $file['file'] = $webp_path;
-        $file['type'] = 'image/webp';
-    }
-    
-    return $file;
 }
+
+// Function to convert new uploads
+if (!function_exists('kloudwebp_convert_new_upload')) {
+    function kloudwebp_convert_new_upload($post_ID) {
+        try {
+            $file = get_attached_file($post_ID);
+            if (!$file || !file_exists($file)) {
+                return;
+            }
+
+            $mime_type = get_post_mime_type($post_ID);
+            if (!in_array($mime_type, array('image/jpeg', 'image/png'))) {
+                return;
+            }
+
+            $options = get_option('kloudwebp_options', array(
+                'conversion_quality' => 80,
+                'auto_convert' => 'yes'
+            ));
+
+            if ($options['auto_convert'] !== 'yes') {
+                return;
+            }
+
+            kloudwebp_log_debug("Processing new attachment: " . $file);
+            kloudwebp_convert_image($file);
+
+        } catch (Exception $e) {
+            kloudwebp_log_error("Error in new upload conversion: " . $e->getMessage());
+        }
+    }
+}
+
+// Add upload hooks with lower priority to ensure file exists
+remove_filter('wp_handle_upload', 'kloudwebp_handle_upload');
+remove_action('add_attachment', 'kloudwebp_convert_new_upload');
+add_filter('wp_handle_upload', 'kloudwebp_handle_upload', 20, 1);
+add_action('add_attachment', 'kloudwebp_convert_new_upload', 20);
 
 // Utility functions for memory management
 function kloudwebp_check_memory_limit($file_path) {
@@ -1009,18 +1047,6 @@ if (!function_exists('wp_convert_hr_to_bytes')) {
 // Hook to automatically convert new image uploads to WebP format
 add_action('add_attachment', 'kloudwebp_convert_new_upload');
 
-if (!function_exists('kloudwebp_convert_new_upload')) {
-    function kloudwebp_convert_new_upload($post_ID) {
-        $file_path = get_attached_file($post_ID);
-        $mime_type = get_post_mime_type($post_ID);
-
-        // Only process JPEG and PNG images
-        if (in_array($mime_type, ['image/jpeg', 'image/png'])) {
-            kloudwebp_convert_image($file_path);
-        }
-    }
-}
-
 // Function to check available image processing libraries
 if (!function_exists('kloudwebp_check_server_support')) {
     function kloudwebp_check_server_support() {
@@ -1057,101 +1083,82 @@ if (!function_exists('kloudwebp_display_server_support')) {
     }
 }
 
-// Initialize Plugin
-if (!function_exists('kloudwebp_init')) {
-    function kloudwebp_init() {
-        // Remove all existing filters to prevent duplicates
-        remove_all_filters('upload_mimes');
-        remove_all_filters('wp_handle_upload');
-        
-        // Add filters only once
-        add_filter('upload_mimes', 'kloudwebp_mime_types');
-        add_filter('wp_handle_upload', 'kloudwebp_handle_upload');
-        
-        // Register the admin menu and settings
-        add_action('admin_menu', 'kloudwebp_admin_menu');
-        add_action('admin_init', 'kloudwebp_register_settings');
-        
-        // Register AJAX handlers
-        add_action('wp_ajax_kloudwebp_convert_images', 'kloudwebp_ajax_convert_images');
-        add_action('wp_ajax_kloudwebp_get_progress', 'kloudwebp_ajax_get_progress');
-        add_action('wp_ajax_kloudwebp_clear_cache', 'kloudwebp_ajax_clear_cache');
-        
-        // Hook for new uploads
-        add_action('add_attachment', 'kloudwebp_convert_new_upload');
-    }
-}
-
-// Function to handle new uploads
-if (!function_exists('kloudwebp_handle_upload')) {
-    function kloudwebp_handle_upload($file) {
+// Function to resize image if needed
+if (!function_exists('kloudwebp_resize_image')) {
+    function kloudwebp_resize_image($file_path, $max_width) {
         try {
-            if (!isset($file['type']) || !in_array($file['type'], array('image/jpeg', 'image/png'))) {
-                return $file;
+            // Get image dimensions
+            list($width, $height) = getimagesize($file_path);
+            if ($width === false || $height === false) {
+                throw new Exception("Failed to get image dimensions");
             }
 
-            $options = get_option('kloudwebp_options', array(
-                'conversion_quality' => 80,
-                'auto_convert' => 'yes'
-            ));
-
-            if ($options['auto_convert'] !== 'yes') {
-                return $file;
+            // Check if resizing is needed
+            if ($width <= $max_width) {
+                return true;
             }
 
-            kloudwebp_log_debug("Processing new upload: " . $file['file']);
+            // Calculate new dimensions
+            $ratio = $max_width / $width;
+            $new_width = round($width * $ratio);
+            $new_height = round($height * $ratio);
+
+            // Get image type
+            $mime_type = wp_check_filetype($file_path)['type'];
             
-            // Convert the image
-            if (kloudwebp_convert_image($file['file'])) {
-                kloudwebp_log_debug("Successfully converted upload: " . $file['file']);
-            } else {
-                kloudwebp_log_error("Failed to convert upload: " . $file['file']);
+            // Create image resource
+            switch ($mime_type) {
+                case 'image/jpeg':
+                    $source = imagecreatefromjpeg($file_path);
+                    break;
+                case 'image/png':
+                    $source = imagecreatefrompng($file_path);
+                    break;
+                default:
+                    throw new Exception("Unsupported image type: " . $mime_type);
             }
 
-            return $file;
-        } catch (Exception $e) {
-            kloudwebp_log_error("Upload handler error: " . $e->getMessage());
-            return $file;
-        }
-    }
-}
-
-// Function to convert new uploads
-if (!function_exists('kloudwebp_convert_new_upload')) {
-    function kloudwebp_convert_new_upload($post_ID) {
-        try {
-            $file = get_attached_file($post_ID);
-            $mime_type = get_post_mime_type($post_ID);
-
-            if (!in_array($mime_type, array('image/jpeg', 'image/png'))) {
-                return;
+            if (!$source) {
+                throw new Exception("Failed to create image resource");
             }
 
-            $options = get_option('kloudwebp_options', array(
-                'conversion_quality' => 80,
-                'auto_convert' => 'yes'
-            ));
-
-            if ($options['auto_convert'] !== 'yes') {
-                return;
-            }
-
-            kloudwebp_log_debug("Processing new attachment: " . $file);
+            // Create new image
+            $destination = imagecreatetruecolor($new_width, $new_height);
             
-            if (kloudwebp_convert_image($file)) {
-                kloudwebp_log_debug("Successfully converted attachment: " . $file);
-                
-                // Update attachment metadata
-                $metadata = wp_get_attachment_metadata($post_ID);
-                if ($metadata) {
-                    $metadata['webp_converted'] = true;
-                    wp_update_attachment_metadata($post_ID, $metadata);
-                }
-            } else {
-                kloudwebp_log_error("Failed to convert attachment: " . $file);
+            // Handle transparency for PNG
+            if ($mime_type === 'image/png') {
+                imagealphablending($destination, false);
+                imagesavealpha($destination, true);
             }
+
+            // Resize
+            if (!imagecopyresampled($destination, $source, 0, 0, 0, 0, $new_width, $new_height, $width, $height)) {
+                throw new Exception("Failed to resize image");
+            }
+
+            // Save resized image
+            switch ($mime_type) {
+                case 'image/jpeg':
+                    $success = imagejpeg($destination, $file_path, 90);
+                    break;
+                case 'image/png':
+                    $success = imagepng($destination, $file_path, 9);
+                    break;
+            }
+
+            // Clean up
+            imagedestroy($source);
+            imagedestroy($destination);
+
+            if (!$success) {
+                throw new Exception("Failed to save resized image");
+            }
+
+            return true;
+
         } catch (Exception $e) {
-            kloudwebp_log_error("Error in new upload conversion: " . $e->getMessage());
+            kloudwebp_log_error("Resize error: " . $e->getMessage());
+            return false;
         }
     }
 }
@@ -1160,7 +1167,7 @@ if (!function_exists('kloudwebp_convert_new_upload')) {
 register_activation_hook(__FILE__, 'kloudwebp_activate');
 register_deactivation_hook(__FILE__, 'kloudwebp_deactivate');
 add_action('init', 'kloudwebp_init');
-add_action('admin_enqueue_scripts', 'kloudwebp_admin_enqueue_scripts');
+add_action('admin_enqueue_scripts', 'kloudwebp_enqueue_scripts');
 
 // Register AJAX handlers
 add_action('wp_ajax_kloudwebp_convert_images', 'kloudwebp_ajax_convert_images');
@@ -1192,4 +1199,65 @@ function kloudwebp_ajax_convert_images() {
 
     $results = kloudwebp_process_images();
     wp_send_json_success($results);
+}
+
+// Enqueue scripts
+if (!function_exists('kloudwebp_enqueue_scripts')) {
+    function kloudwebp_enqueue_scripts() {
+        wp_enqueue_script(
+            'kloudwebp-admin',
+            plugins_url('js/admin.js', __FILE__),
+            array('jquery'),
+            KLOUDWEBP_VERSION,
+            true
+        );
+
+        wp_localize_script('kloudwebp-admin', 'kloudwebpAjax', array(
+            'ajaxurl' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('kloudwebp-ajax-nonce')
+        ));
+    }
+}
+add_action('admin_enqueue_scripts', 'kloudwebp_enqueue_scripts');
+
+// Add upload hooks
+add_filter('wp_handle_upload', 'kloudwebp_handle_upload', 10, 1);
+add_action('add_attachment', 'kloudwebp_convert_new_upload');
+
+// Add AJAX handlers
+add_action('wp_ajax_kloudwebp_convert', 'kloudwebp_ajax_convert');
+add_action('wp_ajax_nopriv_kloudwebp_convert', 'kloudwebp_ajax_convert');
+
+// AJAX conversion handler
+if (!function_exists('kloudwebp_ajax_convert')) {
+    function kloudwebp_ajax_convert() {
+        try {
+            // Verify nonce
+            if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'kloudwebp-ajax-nonce')) {
+                wp_send_json_error('Invalid security token');
+            }
+
+            // Get the attachment ID
+            $attachment_id = isset($_POST['attachment_id']) ? intval($_POST['attachment_id']) : 0;
+            if (!$attachment_id) {
+                wp_send_json_error('Invalid attachment ID');
+            }
+
+            // Get file path
+            $file_path = get_attached_file($attachment_id);
+            if (!$file_path || !file_exists($file_path)) {
+                wp_send_json_error('File not found');
+            }
+
+            // Convert image
+            if (kloudwebp_convert_image($file_path)) {
+                wp_send_json_success('Image converted successfully');
+            } else {
+                wp_send_json_error('Conversion failed');
+            }
+
+        } catch (Exception $e) {
+            wp_send_json_error($e->getMessage());
+        }
+    }
 }
