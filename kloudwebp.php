@@ -407,6 +407,22 @@ function kloudwebp_register_settings() {
         'kloudwebp',
         'kloudwebp_main_section'
     );
+
+    // Display supported image processing libraries
+    add_settings_section(
+        'kloudwebp_server_support_section',
+        __('Server Support', 'kloudwebp'),
+        null,
+        'kloudwebp'
+    );
+
+    add_settings_field(
+        'server_support',
+        __('Supported Image Processing Libraries', 'kloudwebp'),
+        'kloudwebp_server_support_callback',
+        'kloudwebp',
+        'kloudwebp_server_support_section'
+    );
 }
 
 function kloudwebp_sanitize_options($options) {
@@ -467,6 +483,15 @@ function kloudwebp_max_width_callback() {
     $max_width = isset($options['max_width']) ? intval($options['max_width']) : 2048;
     echo "<input type='number' name='kloudwebp_options[max_width]' value='{$max_width}' min='0' step='1' class='small-text' /> px";
     echo "<p class='description'>" . __('Resize large images to this maximum width. Set to 0 to disable resizing.', 'kloudwebp') . "</p>";
+}
+
+function kloudwebp_server_support_callback() {
+    $support = kloudwebp_check_server_support();
+    if (empty($support)) {
+        echo '<p>No supported image processing libraries (Imagick or GD) are available on this server.</p>';
+    } else {
+        echo '<p>Supported image processing libraries on this server: ' . implode(', ', $support) . '.</p>';
+    }
 }
 
 function kloudwebp_settings_page() {
