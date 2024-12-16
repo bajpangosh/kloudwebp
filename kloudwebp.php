@@ -1005,21 +1005,20 @@ function kloudwebp_convert_with_gd($file_path, $webp_path, $quality) {
 }
 
 // Helper function to convert PHP memory limit to bytes
-function wp_convert_hr_to_bytes($size) {
-    $size = trim($size);
-    $last = strtolower($size[strlen($size)-1]);
-    $size = (int)$size;
-    
-    switch($last) {
-        case 'g':
-            $size *= 1024;
-        case 'm':
-            $size *= 1024;
-        case 'k':
-            $size *= 1024;
+if (!function_exists('wp_convert_hr_to_bytes')) {
+    function wp_convert_hr_to_bytes($size) {
+        $value = trim($size);
+        $last = strtolower($value[strlen($value)-1]);
+        switch($last) {
+            case 'g':
+                $value *= 1024;
+            case 'm':
+                $value *= 1024;
+            case 'k':
+                $value *= 1024;
+        }
+        return $value;
     }
-    
-    return $size;
 }
 
 // Initialize Plugin
