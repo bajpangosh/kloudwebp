@@ -547,9 +547,6 @@ class KloudWebP_Admin {
         return $images;
     }
 
-    /**
-     * Convert images for a specific post
-     */
     public function convert_single_post($post_id) {
         if (!current_user_can('manage_options')) {
             return false;
@@ -617,6 +614,41 @@ class KloudWebP_Admin {
             wp_send_json_success($results);
         } else {
             wp_send_json_error('Conversion failed');
+        }
+    }
+
+    /**
+     * Display admin notices for conversion results
+     */
+    public function admin_notices() {
+        if (!isset($_GET['page']) || $_GET['page'] !== $this->plugin_name) {
+            return;
+        }
+
+        $messages = array();
+
+        // Handle post conversion messages
+        if (isset($_GET['posts_converted'])) {
+            $messages[] = sprintf(
+                '%d images converted, %d failed, %d skipped. Updated %d posts/pages.',
+                intval($_GET['posts_converted']),
+                intval($_GET['posts_failed']),
+                intval($_GET['posts_skipped']),
+                intval($_GET['updated_posts'])
+            );
+        }
+
+        // Display settings updated message
+        if (isset($_GET['settings-updated']) && $_GET['settings-updated']) {
+            $messages[] = __('Settings saved successfully.');
+        }
+
+        // Display any messages
+        foreach ($messages as $message) {
+            printf(
+                '<div class="notice notice-success is-dismissible"><p>%s</p></div>',
+                esc_html($message)
+            );
         }
     }
 
