@@ -1,0 +1,132 @@
+.kloudwebp-wrap {
+    max-width: 800px;
+    margin: 20px 0;
+}
+
+.kloudwebp-header {
+    background: #fff;
+    padding: 20px;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    margin-bottom: 20px;
+}
+
+.kloudwebp-header h1 {
+    margin: 0;
+    color: #1d2327;
+}
+
+.kloudwebp-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin: 20px 0;
+}
+
+.kloudwebp-stat-card {
+    background: #fff;
+    padding: 20px;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.kloudwebp-stat-card h3 {
+    margin: 0 0 10px 0;
+    color: #1d2327;
+}
+
+.kloudwebp-stat-card .number {
+    font-size: 24px;
+    font-weight: bold;
+    color: #2271b1;
+}
+
+.kloudwebp-progress {
+    background: #f0f0f1;
+    border-radius: 4px;
+    height: 20px;
+    margin: 20px 0;
+    overflow: hidden;
+}
+
+.kloudwebp-progress-bar {
+    background: #2271b1;
+    height: 100%;
+    width: 0;
+    transition: width 0.3s ease;
+}
+
+.kloudwebp-status {
+    margin: 10px 0;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.kloudwebp-status.success {
+    background: #edfaef;
+    color: #0a5624;
+}
+
+.kloudwebp-status.error {
+    background: #fcf0f1;
+    color: #8c1c1c;
+}
+
+.kloudwebp-settings {
+    background: #fff;
+    padding: 20px;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+}
+
+.kloudwebp-settings .form-table th {
+    width: 250px;
+}
+
+.kloudwebp-button {
+    margin: 5px !important;
+}
+
+.kloudwebp-log {
+    background: #f6f7f7;
+    padding: 15px;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    margin: 20px 0;
+    font-family: monospace;
+}
+
+.kloudwebp-log-entry {
+    margin: 5px 0;
+    padding: 5px;
+    border-bottom: 1px solid #dcdcde;
+}
+
+.kloudwebp-log-entry:last-child {
+    border-bottom: none;
+}
+
+.kloudwebp-optimization-summary {
+    margin: 20px 0;
+    padding: 15px;
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+}
+
+.kloudwebp-optimization-summary table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.kloudwebp-optimization-summary th,
+.kloudwebp-optimization-summary td {
+    padding: 10px;
+    text-align: left;
+    border-bottom: 1px solid #dcdcde;
+}
+
+.kloudwebp-optimization-summary tr:last-child td {
+    border-bottom: none;
+}
