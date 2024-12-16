@@ -276,35 +276,35 @@ function kloudwebp_convert_with_imagick($file_path, $webp_path, $quality) {
 
 function kloudwebp_convert_with_gd($file_path, $webp_path, $quality) {
     try {
-        $image = null;
-        $mime_type = wp_check_filetype($file_path)['type'];
-
-        // Suppress libpng warnings
+        // Suppress warnings
         if (function_exists('error_clear_last')) {
             error_clear_last();
         }
-        
+
+        // Get MIME type
+        $mime_type = wp_check_filetype($file_path)['type'];
+        $image = null;
+
+        // Create image resource based on type
         switch ($mime_type) {
             case 'image/jpeg':
+                kloudwebp_log_debug("Processing JPEG image with GD: " . $file_path);
                 $image = @imagecreatefromjpeg($file_path);
                 break;
+
             case 'image/png':
-                // Handle PNG with proper color management
+                kloudwebp_log_debug("Processing PNG image with GD: " . $file_path);
                 $image = @imagecreatefrompng($file_path);
                 if ($image) {
-                    // Convert to true color if needed
+                    // Handle PNG transparency
                     if (!imageistruecolor($image)) {
                         imagepalettetotruecolor($image);
                     }
-                    
-                    // Handle transparency
                     imagealphablending($image, false);
                     imagesavealpha($image, true);
-                    
-                    // Remove color profile information
-                    imagecolorstotal($image);
                 }
                 break;
+
             default:
                 throw new Exception("Unsupported image type: " . $mime_type);
         }
@@ -314,23 +314,17 @@ function kloudwebp_convert_with_gd($file_path, $webp_path, $quality) {
             throw new Exception("Failed to create image resource. Error: " . ($error ? $error['message'] : 'Unknown error'));
         }
 
-        // Set the background color to white for JPEGs
-        if ($mime_type === 'image/jpeg') {
-            $background = imagecolorallocate($image, 255, 255, 255);
-            imagefill($image, 0, 0, $background);
-        }
-
-        // Create WebP with proper error handling
-        if (!@imagewebp($image, $webp_path, $quality)) {
-            $error = error_get_last();
-            throw new Exception("Failed to save WebP image. Error: " . ($error ? $error['message'] : 'Unknown error'));
-        }
-
+        // Convert to WebP
+        $success = @imagewebp($image, $webp_path, $quality);
         imagedestroy($image);
-        
-        // Verify the WebP file was created successfully
+
+        if (!$success) {
+            throw new Exception("Failed to save WebP image");
+        }
+
+        // Verify the output file
         if (!file_exists($webp_path) || filesize($webp_path) === 0) {
-            throw new Exception("WebP file creation failed or file is empty");
+            throw new Exception("WebP file is empty or not created");
         }
 
         return true;
@@ -1107,15 +1101,16 @@ if (!function_exists('kloudwebp_handle_upload')) {
 
             kloudwebp_log_debug("Processing new upload: " . $file['file']);
             
+            // Convert the image
             if (kloudwebp_convert_image($file['file'])) {
-                kloudwebp_log_debug("Successfully converted: " . $file['file']);
+                kloudwebp_log_debug("Successfully converted upload: " . $file['file']);
             } else {
-                kloudwebp_log_error("Failed to convert: " . $file['file']);
+                kloudwebp_log_error("Failed to convert upload: " . $file['file']);
             }
 
             return $file;
         } catch (Exception $e) {
-            kloudwebp_log_error("Error in upload handler: " . $e->getMessage());
+            kloudwebp_log_error("Upload handler error: " . $e->getMessage());
             return $file;
         }
     }
