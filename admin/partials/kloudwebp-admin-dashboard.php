@@ -20,6 +20,28 @@ function format_size($bytes) {
         KloudWebP Dashboard
     </h1>
 
+    <?php
+    // Display conversion results if available
+    if (isset($_GET['converted']) || isset($_GET['failed']) || isset($_GET['skipped'])) {
+        $converted = intval($_GET['converted']);
+        $failed = intval($_GET['failed']);
+        $skipped = intval($_GET['skipped']);
+        
+        $message_type = ($failed === 0) ? 'success' : ($converted > 0 ? 'warning' : 'error');
+        $message = sprintf(
+            __('Conversion completed: %d images converted, %d failed, %d skipped', 'kloudwebp'),
+            $converted,
+            $failed,
+            $skipped
+        );
+        ?>
+        <div class="notice notice-<?php echo $message_type; ?> is-dismissible">
+            <p><?php echo esc_html($message); ?></p>
+        </div>
+        <?php
+    }
+    ?>
+
     <div class="kloudwebp-stats-grid">
         <!-- Conversion Progress -->
         <div class="kloudwebp-stat-card">

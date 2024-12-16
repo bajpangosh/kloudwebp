@@ -9,6 +9,9 @@ class KloudWebP_Admin {
         $this->plugin_name = $plugin_name;
         $this->version = $version;
         $this->converter = new KloudWebP_Converter();
+
+        // Add action for handling bulk conversion
+        add_action('admin_post_kloudwebp_bulk_convert', array($this, 'handle_bulk_convert'));
     }
 
     public function add_plugin_admin_menu() {
@@ -146,16 +149,16 @@ class KloudWebP_Admin {
         
         $results = $this->converter->bulk_convert();
         
-        add_settings_error(
-            'kloudwebp_messages',
-            'kloudwebp_bulk_convert',
-            sprintf(
-                __('Conversion completed. Success: %d, Failed: %d, Skipped: %d', 'kloudwebp'),
-                $results['success'],
-                $results['failed'],
-                $results['skipped']
+        // Redirect back to dashboard with results
+        wp_redirect(add_query_arg(
+            array(
+                'page' => $this->plugin_name,
+                'converted' => $results['success'],
+                'failed' => $results['failed'],
+                'skipped' => $results['skipped']
             ),
-            'updated'
-        );
+            admin_url('admin.php')
+        ));
+        exit;
     }
 }
