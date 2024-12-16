@@ -10,25 +10,69 @@ class KloudWebP_Admin {
         $this->version = $version;
         $this->converter = new KloudWebP_Converter();
 
-        // Add action for handling bulk conversion
-        add_action('admin_post_kloudwebp_bulk_convert', array($this, 'handle_bulk_convert'));
-        add_action('admin_post_kloudwebp_bulk_convert_posts', array($this, 'handle_bulk_convert_posts'));
+        // Register settings
+        add_action('admin_init', array($this, 'register_settings'));
         
-        // Add filters for handling image uploads
-        add_filter('wp_handle_upload_prefilter', array($this, 'pre_upload'), 10, 1);
-        add_filter('wp_handle_upload', array($this, 'handle_upload'), 10, 2);
-        add_filter('wp_generate_attachment_metadata', array($this, 'update_attachment_metadata'), 10, 2);
-        add_filter('wp_update_attachment_metadata', array($this, 'after_attachment_metadata_update'), 10, 2);
+        // Add menu
+        add_action('admin_menu', array($this, 'add_plugin_menu'));
         
-        // Add filter for image editor save
-        add_filter('wp_image_editors', array($this, 'customize_image_editors'));
+        // Add settings link
+        add_filter('plugin_action_links_' . plugin_basename(plugin_dir_path(__DIR__) . $this->plugin_name . '.php'),
+            array($this, 'add_action_links')
+        );
 
-        // Add filter for attachment URLs
+        // Handle post conversion
+        add_action('admin_post_kloudwebp_convert_posts', array($this, 'handle_convert_posts'));
+        add_action('wp_ajax_kloudwebp_convert_single_post', array($this, 'ajax_convert_single_post'));
+        
+        // Add admin notices
+        add_action('admin_notices', array($this, 'admin_notices'));
+
+        // Handle image uploads
+        add_filter('wp_handle_upload_prefilter', array($this, 'pre_upload'));
+        add_filter('wp_handle_upload', array($this, 'handle_upload'));
+        add_filter('wp_update_attachment_metadata', array($this, 'update_attachment_metadata'), 10, 2);
+        
+        // Filter image URLs
         add_filter('wp_get_attachment_url', array($this, 'filter_attachment_url'), 10, 2);
         add_filter('wp_get_attachment_image_src', array($this, 'filter_attachment_image_src'), 10, 4);
+        
+        // Enqueue styles
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_styles'));
     }
 
-    public function add_plugin_admin_menu() {
+    public function register_settings() {
+        register_setting(
+            'kloudwebp_settings',
+            'kloudwebp_settings',
+            array($this, 'sanitize_settings')
+        );
+
+        add_settings_section(
+            'kloudwebp_main_section',
+            'General Settings',
+            null,
+            'kloudwebp_settings'
+        );
+
+        add_settings_field(
+            'kloudwebp_auto_convert',
+            'Auto Convert',
+            array($this, 'render_auto_convert_field'),
+            'kloudwebp_settings',
+            'kloudwebp_main_section'
+        );
+
+        add_settings_field(
+            'kloudwebp_keep_original',
+            'Keep Original',
+            array($this, 'render_keep_original_field'),
+            'kloudwebp_settings',
+            'kloudwebp_main_section'
+        );
+    }
+
+    public function add_plugin_menu() {
         // Add main menu item
         add_menu_page(
             'KloudWebP Dashboard',
@@ -65,13 +109,6 @@ class KloudWebP_Admin {
             '<a href="' . admin_url('options-general.php?page=' . $this->plugin_name . '-settings') . '">' . __('Settings', 'kloudwebp') . '</a>',
         );
         return array_merge($settings_link, $links);
-    }
-
-    public function register_settings() {
-        // Register settings
-        register_setting($this->plugin_name, 'kloudwebp_quality');
-        register_setting($this->plugin_name, 'kloudwebp_keep_original');
-        register_setting($this->plugin_name, 'kloudwebp_auto_convert');
     }
 
     public function display_plugin_setup_page() {
@@ -154,22 +191,98 @@ class KloudWebP_Admin {
         return $metadata;
     }
 
-    public function handle_bulk_convert() {
+    public function handle_convert_posts() {
         if (!current_user_can('manage_options')) {
             wp_die(__('You do not have sufficient permissions to access this page.'));
         }
 
-        check_admin_referer('kloudwebp_bulk_convert');
+        check_admin_referer('kloudwebp_convert_posts');
+
+        global $wpdb;
         
-        $results = $this->converter->bulk_convert();
-        
+        // Get all posts and pages
+        $posts = $wpdb->get_results("
+            SELECT ID, post_content 
+            FROM {$wpdb->posts} 
+            WHERE post_type IN ('post', 'page') 
+            AND post_status = 'publish'
+        ");
+
+        $results = array(
+            'success' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+            'updated_posts' => 0
+        );
+
+        $processed_urls = array();
+
+        foreach ($posts as $post) {
+            $content_updated = false;
+            $content = $post->post_content;
+
+            // Find all img tags in the content
+            preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $content, $matches);
+            
+            if (!empty($matches[2])) {
+                foreach ($matches[2] as $url) {
+                    // Skip if already processed this URL
+                    if (in_array($url, $processed_urls)) {
+                        continue;
+                    }
+                    
+                    // Convert URL to file path
+                    $file_path = $this->url_to_path($url);
+                    if (!$file_path) {
+                        $results['skipped']++;
+                        continue;
+                    }
+
+                    // Check if it's a JPEG or PNG
+                    if (preg_match('/\.(jpe?g|png)$/i', $file_path) && file_exists($file_path)) {
+                        $webp_path = $this->converter->convert_image($file_path, false);
+                        
+                        if ($webp_path) {
+                            // Get the WebP URL
+                            $webp_url = str_replace(
+                                wp_get_upload_dir()['basedir'],
+                                wp_get_upload_dir()['baseurl'],
+                                $webp_path
+                            );
+
+                            // Update image src in content
+                            $content = str_replace($url, $webp_url, $content);
+                            $content_updated = true;
+                            $results['success']++;
+                        } else {
+                            $results['failed']++;
+                        }
+                    } else {
+                        $results['skipped']++;
+                    }
+
+                    $processed_urls[] = $url;
+                }
+            }
+
+            // Update post content if changed
+            if ($content_updated) {
+                wp_update_post(array(
+                    'ID' => $post->ID,
+                    'post_content' => $content
+                ));
+                $results['updated_posts']++;
+            }
+        }
+
         // Redirect back to dashboard with results
         wp_redirect(add_query_arg(
             array(
                 'page' => $this->plugin_name,
-                'converted' => $results['success'],
-                'failed' => $results['failed'],
-                'skipped' => $results['skipped']
+                'posts_converted' => $results['success'],
+                'posts_failed' => $results['failed'],
+                'posts_skipped' => $results['skipped'],
+                'updated_posts' => $results['updated_posts']
             ),
             admin_url('admin.php')
         ));
@@ -294,28 +407,6 @@ class KloudWebP_Admin {
         return $metadata;
     }
 
-    public function after_attachment_metadata_update($metadata, $attachment_id) {
-        if (!is_array($metadata) || !isset($metadata['file'])) {
-            return $metadata;
-        }
-
-        // Check if this is a WebP image
-        if (preg_match('/\.webp$/', $metadata['file'])) {
-            // Update post mime type
-            wp_update_post(array(
-                'ID' => $attachment_id,
-                'post_mime_type' => 'image/webp'
-            ));
-
-            // Update attachment metadata
-            update_post_meta($attachment_id, '_wp_attachment_image_alt', 
-                get_post_meta($attachment_id, '_wp_attachment_image_alt', true)
-            );
-        }
-
-        return $metadata;
-    }
-
     public function filter_attachment_url($url, $attachment_id) {
         // Check if auto-convert is enabled
         if (!get_option('kloudwebp_auto_convert', false)) {
@@ -364,159 +455,6 @@ class KloudWebP_Admin {
         return $image;
     }
 
-    public function customize_image_editors($editors) {
-        // Ensure WP_Image_Editor_GD is the first choice
-        return array_merge(
-            array('WP_Image_Editor_GD'),
-            $editors
-        );
-    }
-
-    public function get_post_image_count() {
-        global $wpdb;
-        
-        // Get all posts and pages
-        $posts = $wpdb->get_results("
-            SELECT ID, post_content 
-            FROM {$wpdb->posts} 
-            WHERE post_type IN ('post', 'page') 
-            AND post_status = 'publish'
-        ");
-
-        $image_count = 0;
-        $processed_urls = array();
-
-        foreach ($posts as $post) {
-            // Find all img tags in the content
-            preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $post->post_content, $matches);
-            
-            if (!empty($matches[2])) {
-                foreach ($matches[2] as $url) {
-                    // Skip if already processed this URL
-                    if (in_array($url, $processed_urls)) {
-                        continue;
-                    }
-                    
-                    // Convert URL to file path
-                    $file_path = $this->url_to_path($url);
-                    if (!$file_path) {
-                        continue;
-                    }
-
-                    // Check if it's a JPEG or PNG and not already WebP
-                    if (preg_match('/\.(jpe?g|png)$/i', $file_path) && file_exists($file_path)) {
-                        $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
-                        if (!file_exists($webp_path)) {
-                            $image_count++;
-                        }
-                    }
-
-                    $processed_urls[] = $url;
-                }
-            }
-        }
-
-        return $image_count;
-    }
-
-    public function handle_bulk_convert_posts() {
-        if (!current_user_can('manage_options')) {
-            wp_die(__('You do not have sufficient permissions to access this page.'));
-        }
-
-        check_admin_referer('kloudwebp_bulk_convert_posts');
-
-        global $wpdb;
-        
-        // Get all posts and pages
-        $posts = $wpdb->get_results("
-            SELECT ID, post_content 
-            FROM {$wpdb->posts} 
-            WHERE post_type IN ('post', 'page') 
-            AND post_status = 'publish'
-        ");
-
-        $results = array(
-            'success' => 0,
-            'failed' => 0,
-            'skipped' => 0,
-            'updated_posts' => 0
-        );
-
-        $processed_urls = array();
-
-        foreach ($posts as $post) {
-            $content_updated = false;
-            $content = $post->post_content;
-
-            // Find all img tags in the content
-            preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $content, $matches);
-            
-            if (!empty($matches[2])) {
-                foreach ($matches[2] as $url) {
-                    // Skip if already processed this URL
-                    if (in_array($url, $processed_urls)) {
-                        continue;
-                    }
-                    
-                    // Convert URL to file path
-                    $file_path = $this->url_to_path($url);
-                    if (!$file_path) {
-                        $results['skipped']++;
-                        continue;
-                    }
-
-                    // Check if it's a JPEG or PNG
-                    if (preg_match('/\.(jpe?g|png)$/i', $file_path) && file_exists($file_path)) {
-                        $webp_path = $this->converter->convert_image($file_path, false);
-                        
-                        if ($webp_path) {
-                            // Get the WebP URL
-                            $webp_url = str_replace(
-                                wp_get_upload_dir()['basedir'],
-                                wp_get_upload_dir()['baseurl'],
-                                $webp_path
-                            );
-
-                            // Update image src in content
-                            $content = str_replace($url, $webp_url, $content);
-                            $content_updated = true;
-                            $results['success']++;
-                        } else {
-                            $results['failed']++;
-                        }
-                    } else {
-                        $results['skipped']++;
-                    }
-
-                    $processed_urls[] = $url;
-                }
-            }
-
-            // Update post content if changed
-            if ($content_updated) {
-                wp_update_post(array(
-                    'ID' => $post->ID,
-                    'post_content' => $content
-                ));
-                $results['updated_posts']++;
-            }
-        }
-
-        // Redirect back to dashboard with results
-        wp_redirect(add_query_arg(
-            array(
-                'page' => $this->plugin_name,
-                'posts_converted' => $results['success'],
-                'posts_failed' => $results['failed'],
-                'posts_skipped' => $results['skipped'],
-                'updated_posts' => $results['updated_posts']
-            ),
-            admin_url('admin.php')
-        ));
-        exit;
-    }
-
     private function url_to_path($url) {
         // Remove query strings
         $url = preg_replace('/\?.*/', '', $url);
@@ -535,74 +473,151 @@ class KloudWebP_Admin {
     }
 
     /**
-     * Get total count of images in media library
+     * Get posts and pages with their image conversion status
      */
-    private function get_total_images_count() {
+    private function get_posts_conversion_status() {
         global $wpdb;
         
-        $count = $wpdb->get_var(
-            "SELECT COUNT(*) FROM $wpdb->posts 
-            WHERE post_type = 'attachment' 
-            AND post_mime_type IN ('image/jpeg', 'image/png', 'image/webp')"
-        );
-        
-        return (int) $count;
-    }
+        $posts = $wpdb->get_results("
+            SELECT ID, post_title, post_type, post_status, post_modified 
+            FROM {$wpdb->posts} 
+            WHERE post_type IN ('post', 'page') 
+            AND post_status = 'publish'
+            ORDER BY post_modified DESC
+        ");
 
-    /**
-     * Get count of images converted to WebP
-     */
-    private function get_converted_images_count() {
-        global $wpdb;
-        
-        $count = $wpdb->get_var(
-            "SELECT COUNT(*) FROM $wpdb->posts 
-            WHERE post_type = 'attachment' 
-            AND post_mime_type = 'image/webp'"
-        );
-        
-        return (int) $count;
-    }
-
-    /**
-     * Calculate total space saved by WebP conversion
-     */
-    private function get_total_space_saved() {
-        global $wpdb;
-        
-        $attachments = $wpdb->get_results(
-            "SELECT ID, meta_value FROM $wpdb->posts p
-            JOIN $wpdb->postmeta pm ON p.ID = pm.post_id
-            WHERE post_type = 'attachment'
-            AND post_mime_type = 'image/webp'
-            AND meta_key = '_wp_attachment_metadata'"
-        );
-
-        $total_saved = 0;
-        
-        foreach ($attachments as $attachment) {
-            $metadata = maybe_unserialize($attachment->meta_value);
-            if (!empty($metadata['original_size']) && !empty($metadata['filesize'])) {
-                $total_saved += ($metadata['original_size'] - $metadata['filesize']);
+        $results = array();
+        foreach ($posts as $post) {
+            $images = $this->get_post_images($post->ID);
+            if (!empty($images)) {
+                $results[] = array(
+                    'id' => $post->ID,
+                    'title' => $post->post_title,
+                    'type' => $post->post_type,
+                    'modified' => $post->post_modified,
+                    'total_images' => count($images['all']),
+                    'converted' => count($images['converted']),
+                    'unconverted' => count($images['unconverted']),
+                    'images' => $images
+                );
             }
         }
-        
-        return $total_saved;
+
+        return $results;
     }
 
     /**
-     * Update attachment metadata with size information
+     * Get images from a specific post
      */
-    private function update_size_metadata($attachment_id, $original_size, $new_size) {
-        $metadata = wp_get_attachment_metadata($attachment_id);
-        if (!is_array($metadata)) {
-            $metadata = array();
+    private function get_post_images($post_id) {
+        $content = get_post_field('post_content', $post_id);
+        $images = array(
+            'all' => array(),
+            'converted' => array(),
+            'unconverted' => array()
+        );
+
+        // Find all img tags in the content
+        preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $content, $matches);
+        
+        if (!empty($matches[2])) {
+            foreach ($matches[2] as $url) {
+                $file_path = $this->url_to_path($url);
+                if (!$file_path) {
+                    continue;
+                }
+
+                $image_info = array(
+                    'url' => $url,
+                    'path' => $file_path
+                );
+
+                $images['all'][] = $image_info;
+
+                // Check if WebP version exists
+                $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
+                if (file_exists($webp_path)) {
+                    $images['converted'][] = $image_info;
+                } else if (preg_match('/\.(jpe?g|png)$/i', $file_path)) {
+                    $images['unconverted'][] = $image_info;
+                }
+            }
         }
+
+        return $images;
+    }
+
+    /**
+     * Convert images for a specific post
+     */
+    public function convert_single_post($post_id) {
+        if (!current_user_can('manage_options')) {
+            return false;
+        }
+
+        $images = $this->get_post_images($post_id);
+        $content = get_post_field('post_content', $post_id);
+        $content_updated = false;
+        $results = array(
+            'success' => 0,
+            'failed' => 0,
+            'skipped' => 0
+        );
+
+        foreach ($images['unconverted'] as $image) {
+            $webp_path = $this->converter->convert_image($image['path'], false);
+            
+            if ($webp_path) {
+                // Get the WebP URL
+                $webp_url = str_replace(
+                    wp_get_upload_dir()['basedir'],
+                    wp_get_upload_dir()['baseurl'],
+                    $webp_path
+                );
+
+                // Update image src in content
+                $content = str_replace($image['url'], $webp_url, $content);
+                $content_updated = true;
+                $results['success']++;
+            } else {
+                $results['failed']++;
+            }
+        }
+
+        // Update post content if changed
+        if ($content_updated) {
+            wp_update_post(array(
+                'ID' => $post_id,
+                'post_content' => $content
+            ));
+        }
+
+        return $results;
+    }
+
+    /**
+     * AJAX handler for converting single post images
+     */
+    public function ajax_convert_single_post() {
+        check_ajax_referer('kloudwebp_convert_post', 'nonce');
         
-        $metadata['original_size'] = $original_size;
-        $metadata['filesize'] = $new_size;
-        
-        wp_update_attachment_metadata($attachment_id, $metadata);
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            return;
+        }
+
+        $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+        if (!$post_id) {
+            wp_send_json_error('Invalid post ID');
+            return;
+        }
+
+        $results = $this->convert_single_post($post_id);
+        if ($results) {
+            wp_send_json_success($results);
+        } else {
+            wp_send_json_error('Conversion failed');
+        }
     }
 
     public function enqueue_styles() {

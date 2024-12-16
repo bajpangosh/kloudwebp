@@ -61,3 +61,96 @@
 .kloudwebp-card-body {
     padding: 20px;
 }
+
+/* Posts Table Styles */
+.kloudwebp-posts-filter {
+    margin-bottom: 20px;
+    display: flex;
+    gap: 10px;
+}
+
+.kloudwebp-posts-filter select {
+    min-width: 200px;
+}
+
+.kloudwebp-posts-table {
+    margin-top: 15px;
+}
+
+.kloudwebp-posts-table th {
+    font-weight: 600;
+}
+
+.conversion-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.conversion-status .progress-bar {
+    flex: 1;
+    height: 8px;
+    background: #f0f0f1;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.conversion-status .progress {
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+.conversion-status.converted .progress {
+    background: #46b450;
+}
+
+.conversion-status.unconverted .progress {
+    background: #dc3232;
+}
+
+.conversion-status.partial .progress {
+    background: #ffb900;
+}
+
+.status-text {
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.converted .status-text {
+    color: #46b450;
+}
+
+.unconverted .status-text {
+    color: #dc3232;
+}
+
+.partial .status-text {
+    color: #ffb900;
+}
+
+/* Button States */
+.convert-single-post:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+/* Responsive Design */
+@media screen and (max-width: 782px) {
+    .kloudwebp-posts-filter {
+        flex-direction: column;
+    }
+    
+    .kloudwebp-posts-filter select {
+        width: 100%;
+    }
+    
+    .conversion-status {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .conversion-status .progress-bar {
+        width: 100%;
+    }
+}

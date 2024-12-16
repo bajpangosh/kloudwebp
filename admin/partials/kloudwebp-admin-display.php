@@ -6,13 +6,14 @@ if (!defined('WPINC')) {
 ?>
 
 <div class="wrap">
-    <h2>KloudWebP Settings</h2>
-    <?php settings_errors(); ?>
+    <h1><?php echo esc_html(get_admin_page_title()); ?></h1>
+
+    <?php settings_errors('kloudwebp_messages'); ?>
 
     <form method="post" action="options.php">
         <?php
-        settings_fields('kloudwebp');
-        do_settings_sections('kloudwebp');
+        settings_fields('kloudwebp_settings');
+        do_settings_sections('kloudwebp_settings');
         ?>
         
         <table class="form-table">
@@ -113,11 +114,139 @@ if (!defined('WPINC')) {
         </div>
     </div>
 
-    <h3>Bulk Convert Existing Images</h3>
+    <div class="kloudwebp-card">
+        <div class="kloudwebp-card-header">
+            <h2>Posts and Pages Image Status</h2>
+        </div>
+        <div class="kloudwebp-card-body">
+            <?php
+            $posts = $this->get_posts_conversion_status();
+            if (empty($posts)): ?>
+                <p>No posts or pages with images found.</p>
+            <?php else: ?>
+                <div class="kloudwebp-posts-filter">
+                    <select id="post-type-filter">
+                        <option value="all">All Content Types</option>
+                        <option value="post">Posts Only</option>
+                        <option value="page">Pages Only</option>
+                    </select>
+                    <select id="conversion-status-filter">
+                        <option value="all">All Conversion Status</option>
+                        <option value="unconverted">Needs Conversion</option>
+                        <option value="converted">Fully Converted</option>
+                        <option value="partial">Partially Converted</option>
+                    </select>
+                </div>
+
+                <table class="wp-list-table widefat fixed striped kloudwebp-posts-table">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Type</th>
+                            <th>Images</th>
+                            <th>Conversion Status</th>
+                            <th>Last Modified</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($posts as $post): 
+                        $conversion_percentage = $post['total_images'] > 0 ? 
+                            round(($post['converted'] / $post['total_images']) * 100) : 0;
+                        
+                        $status_class = $conversion_percentage == 100 ? 'converted' : 
+                            ($conversion_percentage == 0 ? 'unconverted' : 'partial');
+                        
+                        $status_text = $conversion_percentage == 100 ? 'Fully Converted' : 
+                            ($conversion_percentage == 0 ? 'Not Converted' : 'Partially Converted');
+                    ?>
+                        <tr class="post-row <?php echo esc_attr($post['type']); ?> <?php echo esc_attr($status_class); ?>">
+                            <td>
+                                <strong>
+                                    <a href="<?php echo get_edit_post_link($post['id']); ?>" target="_blank">
+                                        <?php echo esc_html($post['title']); ?>
+                                    </a>
+                                </strong>
+                            </td>
+                            <td><?php echo esc_html(ucfirst($post['type'])); ?></td>
+                            <td>
+                                <?php echo sprintf(
+                                    '%d / %d converted',
+                                    $post['converted'],
+                                    $post['total_images']
+                                ); ?>
+                            </td>
+                            <td>
+                                <div class="conversion-status <?php echo esc_attr($status_class); ?>">
+                                    <div class="progress-bar">
+                                        <div class="progress" style="width: <?php echo esc_attr($conversion_percentage); ?>%"></div>
+                                    </div>
+                                    <span class="status-text"><?php echo esc_html($status_text); ?></span>
+                                </div>
+                            </td>
+                            <td><?php echo get_the_modified_date('Y-m-d H:i', $post['id']); ?></td>
+                            <td>
+                                <?php if ($post['unconverted'] > 0): ?>
+                                    <button class="button convert-single-post" data-post-id="<?php echo esc_attr($post['id']); ?>">
+                                        Convert Images
+                                    </button>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <script>
+    jQuery(document).ready(function($) {
+        // Filters
+        function filterPosts() {
+            var postType = $('#post-type-filter').val();
+            var conversionStatus = $('#conversion-status-filter').val();
+            
+            $('.post-row').each(function() {
+                var $row = $(this);
+                var showPostType = postType === 'all' || $row.hasClass(postType);
+                var showStatus = conversionStatus === 'all' || $row.hasClass(conversionStatus);
+                
+                $row.toggle(showPostType && showStatus);
+            });
+        }
+
+        $('#post-type-filter, #conversion-status-filter').on('change', filterPosts);
+
+        // Convert single post
+        $('.convert-single-post').on('click', function() {
+            var button = $(this);
+            var postId = button.data('post-id');
+            
+            button.prop('disabled', true).text('Converting...');
+
+            $.post(ajaxurl, {
+                action: 'kloudwebp_convert_single_post',
+                post_id: postId,
+                nonce: '<?php echo wp_create_nonce('kloudwebp_convert_post'); ?>'
+            }, function(response) {
+                if (response.success) {
+                    location.reload();
+                } else {
+                    button.text('Error').removeClass('button-primary');
+                }
+            }).fail(function() {
+                button.text('Error').removeClass('button-primary');
+            });
+        });
+    });
+    </script>
+
+    <h3>Convert Post Images</h3>
     <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
-        <?php wp_nonce_field('kloudwebp_bulk_convert'); ?>
-        <input type="hidden" name="action" value="kloudwebp_bulk_convert">
-        <?php submit_button('Convert All Images', 'primary', 'bulk_convert', false); ?>
-        <p class="description">Convert all existing JPEG and PNG images in your media library to WebP format.</p>
+        <?php wp_nonce_field('kloudwebp_convert_posts'); ?>
+        <input type="hidden" name="action" value="kloudwebp_convert_posts">
+        <p>This will scan all your posts and pages for images and convert them to WebP format.</p>
+        <p><button type="submit" class="button button-primary">Convert Post Images</button></p>
     </form>
 </div>
