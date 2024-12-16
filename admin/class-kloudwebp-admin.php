@@ -533,4 +533,85 @@ class KloudWebP_Admin {
         
         return file_exists($path) ? $path : false;
     }
+
+    /**
+     * Get total count of images in media library
+     */
+    private function get_total_images_count() {
+        global $wpdb;
+        
+        $count = $wpdb->get_var(
+            "SELECT COUNT(*) FROM $wpdb->posts 
+            WHERE post_type = 'attachment' 
+            AND post_mime_type IN ('image/jpeg', 'image/png', 'image/webp')"
+        );
+        
+        return (int) $count;
+    }
+
+    /**
+     * Get count of images converted to WebP
+     */
+    private function get_converted_images_count() {
+        global $wpdb;
+        
+        $count = $wpdb->get_var(
+            "SELECT COUNT(*) FROM $wpdb->posts 
+            WHERE post_type = 'attachment' 
+            AND post_mime_type = 'image/webp'"
+        );
+        
+        return (int) $count;
+    }
+
+    /**
+     * Calculate total space saved by WebP conversion
+     */
+    private function get_total_space_saved() {
+        global $wpdb;
+        
+        $attachments = $wpdb->get_results(
+            "SELECT ID, meta_value FROM $wpdb->posts p
+            JOIN $wpdb->postmeta pm ON p.ID = pm.post_id
+            WHERE post_type = 'attachment'
+            AND post_mime_type = 'image/webp'
+            AND meta_key = '_wp_attachment_metadata'"
+        );
+
+        $total_saved = 0;
+        
+        foreach ($attachments as $attachment) {
+            $metadata = maybe_unserialize($attachment->meta_value);
+            if (!empty($metadata['original_size']) && !empty($metadata['filesize'])) {
+                $total_saved += ($metadata['original_size'] - $metadata['filesize']);
+            }
+        }
+        
+        return $total_saved;
+    }
+
+    /**
+     * Update attachment metadata with size information
+     */
+    private function update_size_metadata($attachment_id, $original_size, $new_size) {
+        $metadata = wp_get_attachment_metadata($attachment_id);
+        if (!is_array($metadata)) {
+            $metadata = array();
+        }
+        
+        $metadata['original_size'] = $original_size;
+        $metadata['filesize'] = $new_size;
+        
+        wp_update_attachment_metadata($attachment_id, $metadata);
+    }
+
+    public function enqueue_styles() {
+        wp_enqueue_style(
+            $this->plugin_name,
+            plugin_dir_url(__FILE__) . 'css/kloudwebp-admin.css',
+            array(),
+            $this->version,
+            'all'
+        );
+    }
 }
