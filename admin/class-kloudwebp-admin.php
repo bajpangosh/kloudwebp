@@ -276,13 +276,11 @@ class KloudWebP_Admin {
         }
 
         // Redirect back to dashboard with results
+        set_transient('kloudwebp_conversion_results', $results);
         wp_redirect(add_query_arg(
             array(
                 'page' => $this->plugin_name,
-                'posts_converted' => $results['success'],
-                'posts_failed' => $results['failed'],
-                'posts_skipped' => $results['skipped'],
-                'updated_posts' => $results['updated_posts']
+                'conversion_results' => true
             ),
             admin_url('admin.php')
         ));
@@ -700,6 +698,43 @@ class KloudWebP_Admin {
                 'success' => __('Converted')
             )
         );
+    }
+
+    /**
+     * Display admin notices for conversion results and settings updates
+     */
+    public function admin_notices() {
+        if (!isset($_GET['page']) || $_GET['page'] !== $this->plugin_name) {
+            return;
+        }
+
+        // Display settings updated message
+        if (isset($_GET['settings-updated']) && $_GET['settings-updated']) {
+            ?>
+            <div class="notice notice-success is-dismissible">
+                <p><?php _e('Settings saved successfully.', 'kloudwebp'); ?></p>
+            </div>
+            <?php
+        }
+
+        // Display conversion results if available
+        if (isset($_GET['conversion_results'])) {
+            $results = get_transient('kloudwebp_conversion_results');
+            if ($results) {
+                $message = sprintf(
+                    __('Images converted: %d successful, %d failed, %d skipped.', 'kloudwebp'),
+                    intval($results['success']),
+                    intval($results['failed']),
+                    intval($results['skipped'])
+                );
+                ?>
+                <div class="notice notice-success is-dismissible">
+                    <p><?php echo esc_html($message); ?></p>
+                </div>
+                <?php
+                delete_transient('kloudwebp_conversion_results');
+            }
+        }
     }
 
     /**
