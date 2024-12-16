@@ -194,20 +194,42 @@ function kloudwebp_modify_image_attributes($attr, $attachment, $size) {
 // Image Processing Functions
 function kloudwebp_convert_image($file_path) {
     try {
+        // Skip if the file is already a WebP image
+        if (preg_match('/\.webp$/i', $file_path)) {
+            kloudwebp_log_debug("Skipping WebP image: " . $file_path);
+            return true;
+        }
+
+        // Check if file exists
         if (!file_exists($file_path)) {
             throw new Exception("File does not exist: " . $file_path);
         }
 
+        // Check file size
         $file_size = filesize($file_path);
         if ($file_size > KLOUDWEBP_MAX_IMAGE_SIZE) {
             throw new Exception("File size exceeds maximum limit: " . $file_size . " bytes");
         }
 
+        // Check memory limit
         if (!kloudwebp_check_memory_limit($file_path)) {
             throw new Exception("Insufficient memory to process image: " . $file_path);
         }
 
+        // Check if the file is a valid image
+        $mime_type = wp_check_filetype($file_path)['type'];
+        if (!in_array($mime_type, array('image/jpeg', 'image/png'))) {
+            throw new Exception("Unsupported image type: " . $mime_type);
+        }
+
         $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
+        
+        // Skip if WebP version already exists and is valid
+        if (file_exists($webp_path) && filesize($webp_path) > 0) {
+            kloudwebp_log_debug("WebP version already exists: " . $webp_path);
+            return true;
+        }
+
         $options = get_option('kloudwebp_options', array('conversion_quality' => 80));
         $quality = isset($options['conversion_quality']) ? intval($options['conversion_quality']) : 80;
         $quality = min(max($quality, 1), 100);
@@ -257,16 +279,30 @@ function kloudwebp_convert_with_gd($file_path, $webp_path, $quality) {
         $image = null;
         $mime_type = wp_check_filetype($file_path)['type'];
 
+        // Suppress libpng warnings
+        if (function_exists('error_clear_last')) {
+            error_clear_last();
+        }
+        
         switch ($mime_type) {
             case 'image/jpeg':
-                $image = imagecreatefromjpeg($file_path);
+                $image = @imagecreatefromjpeg($file_path);
                 break;
             case 'image/png':
-                $image = imagecreatefrompng($file_path);
+                // Handle PNG with proper color management
+                $image = @imagecreatefrompng($file_path);
                 if ($image) {
-                    imagepalettetotruecolor($image);
-                    imagealphablending($image, true);
+                    // Convert to true color if needed
+                    if (!imageistruecolor($image)) {
+                        imagepalettetotruecolor($image);
+                    }
+                    
+                    // Handle transparency
+                    imagealphablending($image, false);
                     imagesavealpha($image, true);
+                    
+                    // Remove color profile information
+                    imagecolorstotal($image);
                 }
                 break;
             default:
@@ -274,19 +310,36 @@ function kloudwebp_convert_with_gd($file_path, $webp_path, $quality) {
         }
 
         if (!$image) {
-            throw new Exception("Failed to create image resource");
+            $error = error_get_last();
+            throw new Exception("Failed to create image resource. Error: " . ($error ? $error['message'] : 'Unknown error'));
         }
 
-        $success = imagewebp($image, $webp_path, $quality);
+        // Set the background color to white for JPEGs
+        if ($mime_type === 'image/jpeg') {
+            $background = imagecolorallocate($image, 255, 255, 255);
+            imagefill($image, 0, 0, $background);
+        }
+
+        // Create WebP with proper error handling
+        if (!@imagewebp($image, $webp_path, $quality)) {
+            $error = error_get_last();
+            throw new Exception("Failed to save WebP image. Error: " . ($error ? $error['message'] : 'Unknown error'));
+        }
+
         imagedestroy($image);
         
-        if (!$success) {
-            throw new Exception("Failed to save WebP image");
+        // Verify the WebP file was created successfully
+        if (!file_exists($webp_path) || filesize($webp_path) === 0) {
+            throw new Exception("WebP file creation failed or file is empty");
         }
 
         return true;
+
     } catch (Exception $e) {
         kloudwebp_log_error("GD conversion error: " . $e->getMessage());
+        if (isset($image) && is_resource($image)) {
+            imagedestroy($image);
+        }
         return false;
     }
 }
