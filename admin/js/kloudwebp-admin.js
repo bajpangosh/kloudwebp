@@ -2,6 +2,7 @@
     'use strict';
 
     $(document).ready(function() {
+        // Handle individual post conversion
         $('.kloudwebp-convert-post').on('click', function(e) {
             e.preventDefault();
             
@@ -10,53 +11,98 @@
             const row = button.closest('tr');
             
             // Disable button and show loading state
-            button.prop('disabled', true).text(kloudwebpAjax.converting);
-
+            button.prop('disabled', true).text('Converting...');
+            
+            // Send AJAX request
             $.ajax({
                 url: kloudwebpAjax.ajaxurl,
                 type: 'POST',
                 data: {
-                    action: 'kloudwebp_convert_single_post',
-                    nonce: kloudwebpAjax.nonce,
-                    post_id: postId
+                    action: 'kloudwebp_convert_post',
+                    post_id: postId,
+                    nonce: kloudwebpAjax.nonce
                 },
                 success: function(response) {
                     if (response.success) {
-                        const results = response.data;
-                        
-                        // Update the status cells
-                        row.find('.column-images').text(
-                            results.success + ' / ' + 
-                            (results.success + results.failed + results.skipped)
-                        );
-                        
                         // Update progress bar
-                        const total = results.success + results.failed + results.skipped;
-                        const percentage = total > 0 ? Math.round((results.success / total) * 100) : 0;
-                        const progressBar = row.find('.conversion-progress');
-                        progressBar.css('width', percentage + '%');
+                        const percentage = (response.data.converted / response.data.total) * 100;
+                        row.find('.conversion-progress').css('width', percentage + '%');
                         
-                        // Update button text and status
-                        button.text(kloudwebpAjax.success);
-                        if (percentage === 100) {
-                            button.remove(); // Remove button if all images converted
-                        } else {
-                            button.prop('disabled', false);
+                        // Update images count
+                        row.find('.column-images').text(response.data.converted + ' / ' + response.data.total);
+                        
+                        // Show success message
+                        showNotice('success', response.data.message);
+                        
+                        // Remove convert button if all images are converted
+                        if (response.data.converted === response.data.total) {
+                            button.remove();
                         }
                     } else {
-                        button.text(kloudwebpAjax.error).addClass('button-danger');
-                        setTimeout(() => {
-                            button.text('Convert').removeClass('button-danger').prop('disabled', false);
-                        }, 3000);
+                        showNotice('error', response.data);
+                        button.prop('disabled', false).text('Convert');
                     }
                 },
                 error: function() {
-                    button.text(kloudwebpAjax.error).addClass('button-danger');
-                    setTimeout(() => {
-                        button.text('Convert').removeClass('button-danger').prop('disabled', false);
-                    }, 3000);
+                    showNotice('error', 'An error occurred during conversion');
+                    button.prop('disabled', false).text('Convert');
                 }
             });
         });
+
+        // Handle post type and status filters
+        $('#post-type-filter, #conversion-status-filter').on('change', function() {
+            const postType = $('#post-type-filter').val();
+            const status = $('#conversion-status-filter').val();
+            
+            // Filter table rows based on selection
+            $('.kloudwebp-posts-table tbody tr').each(function() {
+                const row = $(this);
+                const rowPostType = row.find('td:nth-child(2)').text().toLowerCase();
+                const progressBar = row.find('.conversion-progress');
+                const percentage = parseInt(progressBar.css('width')) / parseInt(progressBar.parent().css('width')) * 100;
+                
+                let showRow = true;
+                
+                // Filter by post type
+                if (postType && rowPostType !== postType) {
+                    showRow = false;
+                }
+                
+                // Filter by conversion status
+                if (status) {
+                    switch(status) {
+                        case 'unconverted':
+                            if (percentage > 0) showRow = false;
+                            break;
+                        case 'partial':
+                            if (percentage === 0 || percentage === 100) showRow = false;
+                            break;
+                        case 'converted':
+                            if (percentage < 100) showRow = false;
+                            break;
+                    }
+                }
+                
+                row.toggle(showRow);
+            });
+        });
     });
+
+    // Helper function to show admin notices
+    function showNotice(type, message) {
+        const noticeClass = type === 'success' ? 'notice-success' : 'notice-error';
+        const notice = $('<div class="notice ' + noticeClass + ' is-dismissible"><p>' + message + '</p></div>');
+        
+        // Remove existing notices
+        $('.notice').remove();
+        
+        // Add new notice at the top of the page
+        $('.wrap > h1').after(notice);
+        
+        // Make the notice dismissible
+        if (wp.notices && wp.notices.removeDismissible) {
+            wp.notices.removeDismissible(notice);
+        }
+    }
 })(jQuery);

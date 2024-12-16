@@ -39,6 +39,12 @@ class KloudWebP_Admin {
         
         // Enqueue scripts and styles
         add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
+
+        // Register AJAX handlers
+        add_action('wp_ajax_kloudwebp_convert_post', array($this, 'handle_post_conversion'));
+        
+        // Register admin-post handler for bulk conversion
+        add_action('admin_post_kloudwebp_bulk_convert', array($this, 'handle_bulk_conversion'));
     }
 
     public function register_settings() {
@@ -849,6 +855,184 @@ class KloudWebP_Admin {
             }
         }
 
+        return $images;
+    }
+
+    /**
+     * Register the JavaScript for the admin area.
+     */
+    public function enqueue_scripts() {
+        wp_enqueue_script($this->plugin_name, plugin_dir_url(__FILE__) . 'js/kloudwebp-admin.js', array('jquery'), $this->version, false);
+        
+        // Add AJAX URL and nonce for JavaScript
+        wp_localize_script($this->plugin_name, 'kloudwebpAjax', array(
+            'ajaxurl' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('kloudwebp_convert_nonce')
+        ));
+    }
+
+    /**
+     * Handle single post conversion via AJAX
+     */
+    public function handle_post_conversion() {
+        check_ajax_referer('kloudwebp_convert_nonce', 'nonce');
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            return;
+        }
+
+        $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+        if (!$post_id) {
+            wp_send_json_error('Invalid post ID');
+            return;
+        }
+
+        // Get all images in the post
+        $images = $this->get_post_images($post_id);
+        $converted = 0;
+        $errors = array();
+        
+        foreach ($images as $image) {
+            try {
+                $result = $this->convert_image($image);
+                if ($result) {
+                    $converted++;
+                }
+            } catch (Exception $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+        
+        wp_send_json_success(array(
+            'message' => sprintf(__('%d images converted successfully'), $converted),
+            'converted' => $converted,
+            'total' => count($images),
+            'errors' => $errors
+        ));
+    }
+
+    /**
+     * Handle bulk conversion of all images
+     */
+    public function handle_bulk_conversion() {
+        if (!isset($_POST['kloudwebp_nonce']) || !wp_verify_nonce($_POST['kloudwebp_nonce'], 'kloudwebp_bulk_convert')) {
+            wp_die(__('Security check failed'));
+        }
+
+        if (!current_user_can('manage_options')) {
+            wp_die(__('Insufficient permissions'));
+        }
+
+        // Get all unconverted images
+        $unconverted_images = $this->get_unconverted_images();
+        $converted = 0;
+        $errors = array();
+
+        foreach ($unconverted_images as $image) {
+            try {
+                $result = $this->convert_image($image);
+                if ($result) {
+                    $converted++;
+                }
+            } catch (Exception $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+
+        // Add admin notice
+        add_settings_error(
+            'kloudwebp_messages',
+            'kloudwebp_bulk_convert',
+            sprintf(__('%d images converted successfully. %d errors occurred.'), $converted, count($errors)),
+            $converted > 0 ? 'updated' : 'error'
+        );
+
+        // Redirect back to dashboard
+        wp_redirect(admin_url('admin.php?page=' . $this->plugin_name));
+        exit;
+    }
+
+    /**
+     * Get all images in a post
+     */
+    private function get_post_images($post_id) {
+        $post = get_post($post_id);
+        $images = array();
+        
+        if (!$post) {
+            return $images;
+        }
+        
+        // Get images from post content
+        if (has_blocks($post->post_content)) {
+            $blocks = parse_blocks($post->post_content);
+            $this->extract_images_from_blocks($blocks, $images);
+        } else {
+            preg_match_all('/<img[^>]+>/i', $post->post_content, $img_matches);
+            foreach ($img_matches[0] as $img) {
+                preg_match('/src=[\'"]([^\'"]+)[\'"]/i', $img, $src_match);
+                if (isset($src_match[1])) {
+                    $images[] = $src_match[1];
+                }
+            }
+        }
+        
+        // Get featured image
+        if (has_post_thumbnail($post_id)) {
+            $featured_image_id = get_post_thumbnail_id($post_id);
+            $featured_image = wp_get_attachment_image_src($featured_image_id, 'full');
+            if ($featured_image) {
+                $images[] = $featured_image[0];
+            }
+        }
+        
+        return array_unique($images);
+    }
+
+    /**
+     * Extract images from Gutenberg blocks recursively
+     */
+    private function extract_images_from_blocks($blocks, &$images) {
+        foreach ($blocks as $block) {
+            if ($block['blockName'] === 'core/image') {
+                if (!empty($block['attrs']['url'])) {
+                    $images[] = $block['attrs']['url'];
+                }
+            }
+            if (!empty($block['innerBlocks'])) {
+                $this->extract_images_from_blocks($block['innerBlocks'], $images);
+            }
+        }
+    }
+
+    /**
+     * Get all unconverted images from the media library
+     */
+    private function get_unconverted_images() {
+        $args = array(
+            'post_type' => 'attachment',
+            'post_mime_type' => array('image/jpeg', 'image/png'),
+            'posts_per_page' => -1,
+            'meta_query' => array(
+                array(
+                    'key' => '_webp_converted',
+                    'compare' => 'NOT EXISTS'
+                )
+            )
+        );
+        
+        $query = new WP_Query($args);
+        $images = array();
+        
+        if ($query->have_posts()) {
+            while ($query->have_posts()) {
+                $query->the_post();
+                $images[] = wp_get_attachment_url(get_the_ID());
+            }
+        }
+        
+        wp_reset_postdata();
         return $images;
     }
 }
