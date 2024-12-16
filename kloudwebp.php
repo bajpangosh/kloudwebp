@@ -724,14 +724,26 @@ function kloudwebp_get_unprocessed_images($limit) {
     $processed_ids = get_option('kloudwebp_processed_images', array());
     $processed_ids = array_map('absint', $processed_ids);
     
-    $query = $wpdb->prepare(
-        "SELECT ID FROM {$wpdb->posts} 
-        WHERE post_type = 'attachment' 
-        AND post_mime_type IN ('image/jpeg', 'image/png') 
-        AND ID NOT IN (" . implode(',', array_fill(0, count($processed_ids), '%d')) . ")
-        LIMIT %d",
-        array_merge($processed_ids, array($limit))
-    );
+    if (empty($processed_ids)) {
+        // If no processed IDs, do not include the NOT IN clause
+        $query = $wpdb->prepare(
+            "SELECT ID FROM {$wpdb->posts} 
+            WHERE post_type = 'attachment' 
+            AND post_mime_type IN ('image/jpeg', 'image/png') 
+            LIMIT %d",
+            $limit
+        );
+    } else {
+        // Include NOT IN clause if there are processed IDs
+        $query = $wpdb->prepare(
+            "SELECT ID FROM {$wpdb->posts} 
+            WHERE post_type = 'attachment' 
+            AND post_mime_type IN ('image/jpeg', 'image/png') 
+            AND ID NOT IN (" . implode(',', array_fill(0, count($processed_ids), '%d')) . ")
+            LIMIT %d",
+            array_merge($processed_ids, array($limit))
+        );
+    }
     
     return $wpdb->get_results($query);
 }
@@ -1018,6 +1030,21 @@ if (!function_exists('wp_convert_hr_to_bytes')) {
                 $value *= 1024;
         }
         return $value;
+    }
+}
+
+// Hook to automatically convert new image uploads to WebP format
+add_action('add_attachment', 'kloudwebp_convert_new_upload');
+
+if (!function_exists('kloudwebp_convert_new_upload')) {
+    function kloudwebp_convert_new_upload($post_ID) {
+        $file_path = get_attached_file($post_ID);
+        $mime_type = get_post_mime_type($post_ID);
+
+        // Only process JPEG and PNG images
+        if (in_array($mime_type, ['image/jpeg', 'image/png'])) {
+            kloudwebp_convert_image($file_path);
+        }
     }
 }
 
