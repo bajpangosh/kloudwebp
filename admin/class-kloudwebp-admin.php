@@ -12,6 +12,7 @@ class KloudWebP_Admin {
 
         // Add action for handling bulk conversion
         add_action('admin_post_kloudwebp_bulk_convert', array($this, 'handle_bulk_convert'));
+        add_action('admin_post_kloudwebp_bulk_convert_posts', array($this, 'handle_bulk_convert_posts'));
         
         // Add filters for handling image uploads
         add_filter('wp_handle_upload_prefilter', array($this, 'pre_upload'), 10, 1);
@@ -344,5 +345,167 @@ class KloudWebP_Admin {
             array('WP_Image_Editor_GD'),
             $editors
         );
+    }
+
+    public function get_post_image_count() {
+        global $wpdb;
+        
+        // Get all posts and pages
+        $posts = $wpdb->get_results("
+            SELECT ID, post_content 
+            FROM {$wpdb->posts} 
+            WHERE post_type IN ('post', 'page') 
+            AND post_status = 'publish'
+        ");
+
+        $image_count = 0;
+        $processed_urls = array();
+
+        foreach ($posts as $post) {
+            // Find all img tags in the content
+            preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $post->post_content, $matches);
+            
+            if (!empty($matches[2])) {
+                foreach ($matches[2] as $url) {
+                    // Skip if already processed this URL
+                    if (in_array($url, $processed_urls)) {
+                        continue;
+                    }
+                    
+                    // Convert URL to file path
+                    $file_path = $this->url_to_path($url);
+                    if (!$file_path) {
+                        continue;
+                    }
+
+                    // Check if it's a JPEG or PNG and not already WebP
+                    if (preg_match('/\.(jpe?g|png)$/i', $file_path) && file_exists($file_path)) {
+                        $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
+                        if (!file_exists($webp_path)) {
+                            $image_count++;
+                        }
+                    }
+
+                    $processed_urls[] = $url;
+                }
+            }
+        }
+
+        return $image_count;
+    }
+
+    public function handle_bulk_convert_posts() {
+        if (!current_user_can('manage_options')) {
+            wp_die(__('You do not have sufficient permissions to access this page.'));
+        }
+
+        check_admin_referer('kloudwebp_bulk_convert_posts');
+
+        global $wpdb;
+        
+        // Get all posts and pages
+        $posts = $wpdb->get_results("
+            SELECT ID, post_content 
+            FROM {$wpdb->posts} 
+            WHERE post_type IN ('post', 'page') 
+            AND post_status = 'publish'
+        ");
+
+        $results = array(
+            'success' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+            'updated_posts' => 0
+        );
+
+        $processed_urls = array();
+
+        foreach ($posts as $post) {
+            $content_updated = false;
+            $content = $post->post_content;
+
+            // Find all img tags in the content
+            preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $content, $matches);
+            
+            if (!empty($matches[2])) {
+                foreach ($matches[2] as $url) {
+                    // Skip if already processed this URL
+                    if (in_array($url, $processed_urls)) {
+                        continue;
+                    }
+                    
+                    // Convert URL to file path
+                    $file_path = $this->url_to_path($url);
+                    if (!$file_path) {
+                        $results['skipped']++;
+                        continue;
+                    }
+
+                    // Check if it's a JPEG or PNG
+                    if (preg_match('/\.(jpe?g|png)$/i', $file_path) && file_exists($file_path)) {
+                        $webp_path = $this->converter->convert_image($file_path, false);
+                        
+                        if ($webp_path) {
+                            // Get the WebP URL
+                            $webp_url = str_replace(
+                                wp_get_upload_dir()['basedir'],
+                                wp_get_upload_dir()['baseurl'],
+                                $webp_path
+                            );
+
+                            // Update image src in content
+                            $content = str_replace($url, $webp_url, $content);
+                            $content_updated = true;
+                            $results['success']++;
+                        } else {
+                            $results['failed']++;
+                        }
+                    } else {
+                        $results['skipped']++;
+                    }
+
+                    $processed_urls[] = $url;
+                }
+            }
+
+            // Update post content if changed
+            if ($content_updated) {
+                wp_update_post(array(
+                    'ID' => $post->ID,
+                    'post_content' => $content
+                ));
+                $results['updated_posts']++;
+            }
+        }
+
+        // Redirect back to dashboard with results
+        wp_redirect(add_query_arg(
+            array(
+                'page' => $this->plugin_name,
+                'posts_converted' => $results['success'],
+                'posts_failed' => $results['failed'],
+                'posts_skipped' => $results['skipped'],
+                'updated_posts' => $results['updated_posts']
+            ),
+            admin_url('admin.php')
+        ));
+        exit;
+    }
+
+    private function url_to_path($url) {
+        // Remove query strings
+        $url = preg_replace('/\?.*/', '', $url);
+        
+        // Get upload directory info
+        $upload_dir = wp_upload_dir();
+        
+        // Convert URL to path
+        $path = str_replace(
+            array($upload_dir['baseurl'], site_url()),
+            array($upload_dir['basedir'], ABSPATH),
+            $url
+        );
+        
+        return file_exists($path) ? $path : false;
     }
 }

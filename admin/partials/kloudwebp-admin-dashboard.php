@@ -29,10 +29,32 @@ function format_size($bytes) {
         
         $message_type = ($failed === 0) ? 'success' : ($converted > 0 ? 'warning' : 'error');
         $message = sprintf(
-            __('Conversion completed: %d images converted, %d failed, %d skipped', 'kloudwebp'),
+            __('Media library conversion completed: %d images converted, %d failed, %d skipped', 'kloudwebp'),
             $converted,
             $failed,
             $skipped
+        );
+        ?>
+        <div class="notice notice-<?php echo $message_type; ?> is-dismissible">
+            <p><?php echo esc_html($message); ?></p>
+        </div>
+        <?php
+    }
+
+    // Display post conversion results if available
+    if (isset($_GET['posts_converted']) || isset($_GET['posts_failed']) || isset($_GET['posts_skipped'])) {
+        $converted = intval($_GET['posts_converted']);
+        $failed = intval($_GET['posts_failed']);
+        $skipped = intval($_GET['posts_skipped']);
+        $updated_posts = intval($_GET['updated_posts']);
+        
+        $message_type = ($failed === 0) ? 'success' : ($converted > 0 ? 'warning' : 'error');
+        $message = sprintf(
+            __('Post image conversion completed: %d images converted, %d failed, %d skipped, %d posts updated', 'kloudwebp'),
+            $converted,
+            $failed,
+            $skipped,
+            $updated_posts
         );
         ?>
         <div class="notice notice-<?php echo $message_type; ?> is-dismissible">
@@ -86,16 +108,35 @@ function format_size($bytes) {
                     <?php 
                     if ($stats['unconverted_images'] > 0) {
                         submit_button(
-                            sprintf('Convert Remaining (%d) Images', $stats['unconverted_images']),
+                            sprintf('Convert Media Library Images (%d)', $stats['unconverted_images']),
                             'primary',
                             'bulk_convert',
                             false
                         );
                     } else {
-                        echo '<p class="success-message">✓ All images are converted!</p>';
+                        echo '<p class="success-message">✓ All media library images are converted!</p>';
                     }
                     ?>
                 </form>
+
+                <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
+                    <?php wp_nonce_field('kloudwebp_bulk_convert_posts'); ?>
+                    <input type="hidden" name="action" value="kloudwebp_bulk_convert_posts">
+                    <?php
+                    $post_images = $this->get_post_image_count();
+                    if ($post_images > 0) {
+                        submit_button(
+                            sprintf('Convert Post & Page Images (%d found)', $post_images),
+                            'secondary',
+                            'bulk_convert_posts',
+                            false
+                        );
+                    } else {
+                        echo '<p class="success-message">✓ No unconverted images found in posts!</p>';
+                    }
+                    ?>
+                </form>
+
                 <a href="<?php echo admin_url('admin.php?page=' . $this->plugin_name . '-settings'); ?>" class="button button-secondary">
                     Configure Settings
                 </a>
