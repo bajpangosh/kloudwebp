@@ -10,7 +10,7 @@ class KloudWebP_Converter {
         $this->keep_original = get_option('kloudwebp_keep_original', true);
     }
 
-    public function convert_image($file_path) {
+    public function convert_image($file_path, $update_url = false) {
         if (!file_exists($file_path)) {
             $this->log_error("File not found: $file_path");
             return false;
@@ -23,14 +23,21 @@ class KloudWebP_Converter {
         }
 
         try {
+            $webp_path = false;
             if (extension_loaded('imagick')) {
-                return $this->convert_with_imagick($file_path);
+                $webp_path = $this->convert_with_imagick($file_path);
             } elseif (function_exists('imagewebp')) {
-                return $this->convert_with_gd($file_path);
+                $webp_path = $this->convert_with_gd($file_path);
             } else {
                 $this->log_error("No suitable image conversion library found");
                 return false;
             }
+
+            if ($webp_path && $update_url) {
+                $this->update_attachment_url($file_path, $webp_path);
+            }
+
+            return $webp_path;
         } catch (Exception $e) {
             $this->log_error("Conversion failed: " . $e->getMessage());
             return false;
@@ -95,6 +102,60 @@ class KloudWebP_Converter {
         }
     }
 
+    private function update_attachment_url($original_path, $webp_path) {
+        global $wpdb;
+        
+        // Get the attachment ID based on the original file path
+        $upload_dir = wp_upload_dir();
+        $relative_path = str_replace($upload_dir['basedir'] . '/', '', $original_path);
+        
+        $attachment_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT post_id FROM $wpdb->postmeta WHERE meta_key = '_wp_attached_file' AND meta_value = %s",
+            $relative_path
+        ));
+
+        if (!$attachment_id) {
+            return false;
+        }
+
+        // Update the attachment metadata
+        $webp_url = str_replace($upload_dir['basedir'], $upload_dir['baseurl'], $webp_path);
+        $original_url = str_replace($upload_dir['basedir'], $upload_dir['baseurl'], $original_path);
+
+        // Update guid if we're replacing the original
+        if (!$this->keep_original) {
+            $wpdb->update(
+                $wpdb->posts,
+                array('guid' => $webp_url),
+                array('ID' => $attachment_id)
+            );
+        }
+
+        // Update attachment metadata
+        $metadata = wp_get_attachment_metadata($attachment_id);
+        if (!empty($metadata)) {
+            $old_file = basename($original_path);
+            $new_file = basename($webp_path);
+            
+            // Update the main file
+            $metadata['file'] = str_replace($old_file, $new_file, $metadata['file']);
+            
+            // Update sizes if they exist
+            if (!empty($metadata['sizes'])) {
+                foreach ($metadata['sizes'] as $size => $size_info) {
+                    $size_file = $size_info['file'];
+                    $size_webp = preg_replace('/\.(jpe?g|png)$/i', '.webp', $size_file);
+                    $metadata['sizes'][$size]['file'] = $size_webp;
+                    $metadata['sizes'][$size]['mime-type'] = 'image/webp';
+                }
+            }
+            
+            wp_update_attachment_metadata($attachment_id, $metadata);
+        }
+
+        return true;
+    }
+
     public function bulk_convert() {
         $args = array(
             'post_type' => 'attachment',
@@ -112,7 +173,7 @@ class KloudWebP_Converter {
 
         foreach ($attachments as $attachment_id) {
             $file = get_attached_file($attachment_id);
-            if ($this->convert_image($file)) {
+            if ($this->convert_image($file, true)) {
                 $results['success']++;
             } else {
                 $results['failed']++;

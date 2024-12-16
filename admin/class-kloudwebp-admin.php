@@ -12,6 +12,12 @@ class KloudWebP_Admin {
 
         // Add action for handling bulk conversion
         add_action('admin_post_kloudwebp_bulk_convert', array($this, 'handle_bulk_convert'));
+        
+        // Add filter for handling image uploads
+        add_filter('wp_handle_upload', array($this, 'handle_upload'), 10, 2);
+        
+        // Add filter for attachment metadata
+        add_filter('wp_generate_attachment_metadata', array($this, 'update_attachment_metadata'), 10, 2);
     }
 
     public function add_plugin_admin_menu() {
@@ -160,5 +166,77 @@ class KloudWebP_Admin {
             admin_url('admin.php')
         ));
         exit;
+    }
+
+    public function handle_upload($upload, $context = 'upload') {
+        // Only process image uploads
+        if (strpos($upload['type'], 'image/') !== 0) {
+            return $upload;
+        }
+
+        // Only process JPEG and PNG
+        if (!in_array($upload['type'], ['image/jpeg', 'image/png'])) {
+            return $upload;
+        }
+
+        // Convert the uploaded image
+        $webp_path = $this->converter->convert_image($upload['file'], true);
+        
+        if ($webp_path && !get_option('kloudwebp_keep_original', true)) {
+            // Update the upload array with WebP information
+            $upload['file'] = $webp_path;
+            $upload['url'] = str_replace(
+                wp_get_upload_dir()['basedir'],
+                wp_get_upload_dir()['baseurl'],
+                $webp_path
+            );
+            $upload['type'] = 'image/webp';
+        }
+
+        return $upload;
+    }
+
+    public function update_attachment_metadata($metadata, $attachment_id) {
+        if (!is_array($metadata) || !isset($metadata['file'])) {
+            return $metadata;
+        }
+
+        // Get the full path to the main image file
+        $upload_dir = wp_upload_dir();
+        $file_path = path_join($upload_dir['basedir'], $metadata['file']);
+        
+        // Check if this is a JPEG or PNG
+        $mime_type = get_post_mime_type($attachment_id);
+        if (!in_array($mime_type, ['image/jpeg', 'image/png'])) {
+            return $metadata;
+        }
+
+        // Convert main image if not already converted
+        if (!preg_match('/\.webp$/', $file_path)) {
+            $webp_path = $this->converter->convert_image($file_path, true);
+            if ($webp_path && !get_option('kloudwebp_keep_original', true)) {
+                $metadata['file'] = str_replace($upload_dir['basedir'] . '/', '', $webp_path);
+                wp_update_attachment_metadata($attachment_id, $metadata);
+            }
+        }
+
+        // Convert all image sizes
+        if (isset($metadata['sizes'])) {
+            $base_dir = dirname($file_path);
+            
+            foreach ($metadata['sizes'] as $size => $size_info) {
+                $size_file = path_join($base_dir, $size_info['file']);
+                
+                if (!preg_match('/\.webp$/', $size_file)) {
+                    $size_webp = $this->converter->convert_image($size_file, false);
+                    if ($size_webp && !get_option('kloudwebp_keep_original', true)) {
+                        $metadata['sizes'][$size]['file'] = basename($size_webp);
+                        $metadata['sizes'][$size]['mime-type'] = 'image/webp';
+                    }
+                }
+            }
+        }
+
+        return $metadata;
     }
 }
