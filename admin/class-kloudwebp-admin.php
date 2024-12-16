@@ -540,77 +540,86 @@ class KloudWebP_Admin {
     }
 
     /**
-     * Get posts and pages with their image conversion status
+     * Get posts and pages with their conversion status
      */
-    private function get_posts_conversion_status() {
+    public function get_posts_conversion_status() {
         global $wpdb;
         
+        // Get all published posts and pages
         $posts = $wpdb->get_results("
-            SELECT ID, post_title, post_type, post_status, post_modified 
+            SELECT ID, post_title, post_type, post_modified 
             FROM {$wpdb->posts} 
             WHERE post_type IN ('post', 'page') 
             AND post_status = 'publish'
+            ORDER BY post_modified DESC
         ");
 
-        $results = array();
-        foreach ($posts as $post) {
-            $images = $this->get_post_images($post->ID);
-            if (!empty($images)) {
-                $results[] = array(
-                    'id' => $post->ID,
-                    'title' => $post->post_title,
-                    'type' => $post->post_type,
-                    'modified' => $post->post_modified,
-                    'total_images' => count($images['all']),
-                    'converted' => count($images['converted']),
-                    'unconverted' => count($images['unconverted']),
-                    'images' => $images
-                );
-            }
-        }
-
-        return $results;
+        return $posts;
     }
 
     /**
-     * Get images from a specific post
+     * Get total images count for a specific post or all posts
      */
-    private function get_post_images($post_id) {
-        $content = get_post_field('post_content', $post_id);
-        $images = array(
-            'all' => array(),
-            'converted' => array(),
-            'unconverted' => array()
-        );
+    public function get_total_images_count($post_id = null) {
+        global $wpdb;
 
-        // Find all img tags in the content
-        preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $content, $matches);
-        
-        if (!empty($matches[2])) {
-            foreach ($matches[2] as $url) {
-                $file_path = $this->url_to_path($url);
-                if (!$file_path) {
-                    continue;
-                }
+        if ($post_id) {
+            // Get images from post content
+            $post = get_post($post_id);
+            if (!$post) return 0;
 
-                $image_info = array(
-                    'url' => $url,
-                    'path' => $file_path
-                );
+            $content = $post->post_content;
+            preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $content, $matches);
+            return count($matches[2]);
+        } else {
+            // Get all images from media library
+            $query = "SELECT COUNT(*) FROM $wpdb->posts WHERE post_type = 'attachment' 
+                     AND (post_mime_type LIKE 'image/jpeg' OR post_mime_type LIKE 'image/png')";
+            return (int) $wpdb->get_var($query);
+        }
+    }
 
-                $images['all'][] = $image_info;
+    /**
+     * Get converted images count for a specific post or all posts
+     */
+    public function get_converted_images_count($post_id = null) {
+        global $wpdb;
 
-                // Check if WebP version exists
-                $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
-                if (file_exists($webp_path)) {
-                    $images['converted'][] = $image_info;
-                } else if (preg_match('/\.(jpe?g|png)$/i', $file_path)) {
-                    $images['unconverted'][] = $image_info;
-                }
+        if ($post_id) {
+            // Get converted images from post content
+            $post = get_post($post_id);
+            if (!$post) return 0;
+
+            $content = $post->post_content;
+            preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+\.webp)/', $content, $matches);
+            return count($matches[2]);
+        } else {
+            // Get all converted images
+            $upload_dir = wp_upload_dir();
+            $webp_files = glob($upload_dir['basedir'] . '/**/*.webp');
+            return count($webp_files);
+        }
+    }
+
+    /**
+     * Get total space saved by WebP conversion
+     */
+    public function get_total_space_saved() {
+        $upload_dir = wp_upload_dir();
+        $webp_files = glob($upload_dir['basedir'] . '/**/*.webp');
+        $total_saved = 0;
+
+        foreach ($webp_files as $webp_file) {
+            // Get original file path
+            $original_file = preg_replace('/\.webp$/', '', $webp_file);
+            if (file_exists($original_file)) {
+                $original_size = filesize($original_file);
+                $webp_size = filesize($webp_file);
+                $total_saved += max(0, $original_size - $webp_size);
             }
         }
 
-        return $images;
+        return $total_saved;
     }
 
     public function convert_single_post($post_id) {
@@ -805,82 +814,41 @@ class KloudWebP_Admin {
         }
     }
 
-    /**
-     * Get total count of images in media library
-     */
-    public function get_total_images_count($post_id = null) {
-        global $wpdb;
+    private function get_post_images($post_id) {
+        $content = get_post_field('post_content', $post_id);
+        $images = array(
+            'all' => array(),
+            'converted' => array(),
+            'unconverted' => array()
+        );
 
-        if ($post_id) {
-            // Get images from post content
-            $post = get_post($post_id);
-            if (!$post) return 0;
+        // Find all img tags in the content
+        preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $content, $matches);
+        
+        if (!empty($matches[2])) {
+            foreach ($matches[2] as $url) {
+                $file_path = $this->url_to_path($url);
+                if (!$file_path) {
+                    continue;
+                }
 
-            $content = $post->post_content;
-            preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+)/', $content, $matches);
-            return count($matches[2]);
-        } else {
-            // Get all images from media library
-            $query = "SELECT COUNT(*) FROM $wpdb->posts WHERE post_type = 'attachment' 
-                     AND (post_mime_type LIKE 'image/jpeg' OR post_mime_type LIKE 'image/png')";
-            return (int) $wpdb->get_var($query);
-        }
-    }
+                $image_info = array(
+                    'url' => $url,
+                    'path' => $file_path
+                );
 
-    /**
-     * Get converted images count for a specific post or all posts
-     */
-    public function get_converted_images_count($post_id = null) {
-        global $wpdb;
+                $images['all'][] = $image_info;
 
-        if ($post_id) {
-            // Get converted images from post content
-            $post = get_post($post_id);
-            if (!$post) return 0;
-
-            $content = $post->post_content;
-            preg_match_all('/<img[^>]+src=([\'"])?([^\'">]+\.webp)/', $content, $matches);
-            return count($matches[2]);
-        } else {
-            // Get all converted images
-            $upload_dir = wp_upload_dir();
-            $webp_files = glob($upload_dir['basedir'] . '/**/*.webp');
-            return count($webp_files);
-        }
-    }
-
-    /**
-     * Get total space saved by WebP conversion
-     */
-    public function get_total_space_saved() {
-        $upload_dir = wp_upload_dir();
-        $webp_files = glob($upload_dir['basedir'] . '/**/*.webp');
-        $total_saved = 0;
-
-        foreach ($webp_files as $webp_file) {
-            // Get original file path
-            $original_file = preg_replace('/\.webp$/', '', $webp_file);
-            if (file_exists($original_file)) {
-                $original_size = filesize($original_file);
-                $webp_size = filesize($webp_file);
-                $total_saved += max(0, $original_size - $webp_size);
+                // Check if WebP version exists
+                $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
+                if (file_exists($webp_path)) {
+                    $images['converted'][] = $image_info;
+                } else if (preg_match('/\.(jpe?g|png)$/i', $file_path)) {
+                    $images['unconverted'][] = $image_info;
+                }
             }
         }
 
-        return $total_saved;
-    }
-
-    /**
-     * Get posts and pages with their conversion status
-     */
-    public function get_posts_conversion_status() {
-        $args = array(
-            'post_type' => array('post', 'page'),
-            'posts_per_page' => -1,
-            'post_status' => 'publish'
-        );
-
-        $query = new WP_Query($args);
-        return $query->posts;
+        return $images;
     }
 }
