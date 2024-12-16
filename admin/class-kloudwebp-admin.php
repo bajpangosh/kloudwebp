@@ -661,4 +661,102 @@ class KloudWebP_Admin {
             'all'
         );
     }
+
+    /**
+     * Render the auto convert field
+     */
+    public function render_auto_convert_field() {
+        $options = get_option('kloudwebp_settings', array());
+        $auto_convert = isset($options['auto_convert']) ? $options['auto_convert'] : false;
+        ?>
+        <label>
+            <input type="checkbox" name="kloudwebp_settings[auto_convert]" value="1" <?php checked(1, $auto_convert); ?>>
+            Automatically convert new image uploads to WebP
+        </label>
+        <p class="description">When enabled, JPEG and PNG images will be automatically converted to WebP format upon upload.</p>
+        <?php
+    }
+
+    /**
+     * Render the keep original field
+     */
+    public function render_keep_original_field() {
+        $options = get_option('kloudwebp_settings', array());
+        $keep_original = isset($options['keep_original']) ? $options['keep_original'] : true;
+        ?>
+        <label>
+            <input type="checkbox" name="kloudwebp_settings[keep_original]" value="1" <?php checked(1, $keep_original); ?>>
+            Keep original images after conversion
+        </label>
+        <p class="description">If enabled, original JPEG and PNG files will be kept after converting to WebP.</p>
+        <?php
+    }
+
+    /**
+     * Sanitize settings
+     */
+    public function sanitize_settings($input) {
+        $sanitized = array();
+        
+        $sanitized['auto_convert'] = isset($input['auto_convert']) ? 1 : 0;
+        $sanitized['keep_original'] = isset($input['keep_original']) ? 1 : 0;
+        
+        return $sanitized;
+    }
+
+    /**
+     * Get total count of images in media library
+     */
+    private function get_total_images_count() {
+        global $wpdb;
+        
+        $count = $wpdb->get_var(
+            "SELECT COUNT(*) FROM $wpdb->posts 
+            WHERE post_type = 'attachment' 
+            AND post_mime_type IN ('image/jpeg', 'image/png', 'image/webp')"
+        );
+        
+        return (int) $count;
+    }
+
+    /**
+     * Get count of images converted to WebP
+     */
+    private function get_converted_images_count() {
+        global $wpdb;
+        
+        $count = $wpdb->get_var(
+            "SELECT COUNT(*) FROM $wpdb->posts 
+            WHERE post_type = 'attachment' 
+            AND post_mime_type = 'image/webp'"
+        );
+        
+        return (int) $count;
+    }
+
+    /**
+     * Calculate total space saved by WebP conversion
+     */
+    private function get_total_space_saved() {
+        global $wpdb;
+        
+        $attachments = $wpdb->get_results(
+            "SELECT ID, meta_value FROM $wpdb->posts p
+            JOIN $wpdb->postmeta pm ON p.ID = pm.post_id
+            WHERE post_type = 'attachment'
+            AND post_mime_type = 'image/webp'
+            AND meta_key = '_wp_attachment_metadata'"
+        );
+
+        $total_saved = 0;
+        
+        foreach ($attachments as $attachment) {
+            $metadata = maybe_unserialize($attachment->meta_value);
+            if (!empty($metadata['original_size']) && !empty($metadata['filesize'])) {
+                $total_saved += ($metadata['original_size'] - $metadata['filesize']);
+            }
+        }
+        
+        return $total_saved;
+    }
 }
