@@ -27,6 +27,15 @@ require_once KLOUDWEBP_PLUGIN_DIR . 'includes/class-kloudwebp.php';
 // Initialize the plugin
 function run_kloudwebp() {
     $plugin = new KloudWebP();
+    $plugin->loader->add_action('admin_enqueue_scripts', $plugin->plugin_admin, 'enqueue_styles');
+    $plugin->loader->add_action('admin_enqueue_scripts', $plugin->plugin_admin, 'enqueue_scripts');
+    $plugin->loader->add_action('admin_menu', $plugin->plugin_admin, 'add_plugin_admin_menu');
+    $plugin->loader->add_action('wp_ajax_convert_images', $plugin->plugin_admin, 'convert_images');
+    $plugin->loader->add_action('wp_ajax_get_conversion_stats', $plugin->plugin_admin, 'get_conversion_stats');
+    
+    // Add settings link on plugin page
+    $plugin_basename = plugin_basename(plugin_dir_path(__FILE__) . 'kloudwebp.php');
+    $plugin->loader->add_filter('plugin_action_links_' . $plugin_basename, $plugin->plugin_admin, 'add_action_links');
     $plugin->run();
 }
 run_kloudwebp();

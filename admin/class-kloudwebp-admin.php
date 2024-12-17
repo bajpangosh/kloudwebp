@@ -355,4 +355,16 @@ class KloudWebP_Admin {
         
         return $total_saved;
     }
+
+    /**
+     * Add settings link to plugin page
+     *
+     * @param array $links Array of plugin action links
+     * @return array Modified array of plugin action links
+     */
+    public function add_action_links($links) {
+        $settings_link = '<a href="' . admin_url('options-general.php?page=kloudwebp') . '">' . __('Settings', 'kloudwebp') . '</a>';
+        array_unshift($links, $settings_link);
+        return $links;
+    }
 }
