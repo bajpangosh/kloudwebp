@@ -10,6 +10,7 @@ class KloudWebP_Converter {
     public function convert_post_images($post_id) {
         $post = get_post($post_id);
         if (!$post) {
+            $this->log_debug("Post not found: $post_id", 'error');
             return array(
                 'success' => false,
                 'message' => 'Post not found'
@@ -20,6 +21,7 @@ class KloudWebP_Converter {
         $images = $this->get_images_from_content($post->post_content);
         
         if (empty($images)) {
+            $this->log_debug("No images found in post: $post_id");
             $this->update_conversion_status($post_id, 'no_images');
             return array(
                 'success' => true,
@@ -28,6 +30,8 @@ class KloudWebP_Converter {
             );
         }
 
+        $this->log_debug("Found " . count($images) . " images in post: $post_id");
+        
         $converted = 0;
         $failed = 0;
         $skipped = 0;
@@ -35,16 +39,19 @@ class KloudWebP_Converter {
         $updated_urls = array();
 
         foreach ($images as $image) {
+            $this->log_debug("Processing image: " . $image['url']);
             $result = $this->convert_image($image['url']);
             
             if ($result['success']) {
                 $converted++;
+                $this->log_debug("Successfully converted: " . $image['url'] . " to WebP");
                 
                 // Store original and WebP URLs for replacement
                 $updated_urls[$image['url']] = $result['webp_url'];
                 
                 // Update image srcset if exists
                 if (!empty($image['srcset'])) {
+                    $this->log_debug("Processing srcset for: " . $image['url']);
                     $srcset_urls = explode(',', $image['srcset']);
                     foreach ($srcset_urls as $srcset_url) {
                         $parts = preg_split('/\s+/', trim($srcset_url));
@@ -52,20 +59,27 @@ class KloudWebP_Converter {
                             $src_url = $parts[0];
                             $srcset_result = $this->convert_image($src_url);
                             if ($srcset_result['success']) {
+                                $this->log_debug("Successfully converted srcset image: " . $src_url);
                                 $updated_urls[$src_url] = $srcset_result['webp_url'];
+                            } else {
+                                $this->log_debug("Failed to convert srcset image: " . $src_url, 'error');
                             }
                         }
                     }
                 }
             } elseif ($result['skipped']) {
                 $skipped++;
+                $this->log_debug("Skipped image: " . $image['url'] . " - " . $result['message']);
             } else {
                 $failed++;
+                $this->log_debug("Failed to convert image: " . $image['url'] . " - " . $result['message'], 'error');
             }
         }
 
         // Update post content if setting is enabled and we have conversions
         if ($converted > 0 && get_option('kloudwebp_update_content', true) && !empty($updated_urls)) {
+            $this->log_debug("Updating post content with WebP URLs for post: $post_id");
+            
             // Update image tags with WebP sources
             foreach ($images as $image) {
                 $original_tag = $image['tag'];
@@ -101,19 +115,28 @@ class KloudWebP_Converter {
                     $picture_tag .= '</picture>';
                     
                     $content = str_replace($original_tag, $picture_tag, $content);
+                    $this->log_debug("Added picture tag for: " . $image['url']);
                 }
             }
 
             // Update post content
-            wp_update_post(array(
+            $update_result = wp_update_post(array(
                 'ID' => $post_id,
                 'post_content' => $content
             ));
+
+            if (is_wp_error($update_result)) {
+                $this->log_debug("Failed to update post content: " . $update_result->get_error_message(), 'error');
+            } else {
+                $this->log_debug("Successfully updated post content");
+            }
         }
 
         // Determine overall status
         $status = $this->determine_status($converted, count($images));
         $this->update_conversion_status($post_id, $status);
+
+        $this->log_debug("Conversion complete for post $post_id - Status: $status, Converted: $converted, Failed: $failed, Skipped: $skipped");
 
         return array(
             'success' => true,
@@ -126,7 +149,14 @@ class KloudWebP_Converter {
     }
 
     /**
-     * Get all images from post content
+     * Check if URL is already a WebP image
+     */
+    private function is_webp($url) {
+        return (bool) preg_match('/\.webp(\?.*)?$/i', $url);
+    }
+
+    /**
+     * Get images from post content
      */
     private function get_images_from_content($content) {
         $images = array();
@@ -143,6 +173,11 @@ class KloudWebP_Converter {
                 // Get src attribute
                 if (preg_match('/src=[\'"]([^\'"]+)[\'"]/', $img_tag, $match)) {
                     $url = $match[1];
+                    // Skip if already WebP
+                    if ($this->is_webp($url)) {
+                        $this->log_debug("Skipping already WebP image: " . $url);
+                        continue;
+                    }
                     if ($this->is_internal_image($url)) {
                         $image_data['url'] = $url;
                     }
@@ -370,5 +405,20 @@ class KloudWebP_Converter {
                 )
             );
         }
+    }
+
+    /**
+     * Log debug message
+     */
+    private function log_debug($message, $type = 'info') {
+        if (!get_option('kloudwebp_debug_log', false)) {
+            return;
+        }
+
+        $log_file = KLOUDWEBP_PLUGIN_DIR . 'debug.log';
+        $timestamp = current_time('mysql');
+        $log_message = sprintf("[%s] [%s] %s\n", $timestamp, strtoupper($type), $message);
+        
+        error_log($log_message, 3, $log_file);
     }
 }
