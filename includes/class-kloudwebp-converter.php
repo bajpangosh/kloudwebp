@@ -209,154 +209,300 @@ class KloudWebP_Converter {
      * Convert single image to WebP
      */
     private function convert_image($url) {
-        // Get the file path from URL
-        $file_path = $this->url_to_path($url);
-        if (!$file_path || !file_exists($file_path)) {
-            return array(
-                'success' => false,
-                'message' => 'File not found',
-                'skipped' => true
-            );
-        }
+        try {
+            // Get the file path from URL
+            $file_path = $this->url_to_path($url);
+            if (!$file_path || !file_exists($file_path)) {
+                return array(
+                    'success' => false,
+                    'message' => 'File not found',
+                    'skipped' => true
+                );
+            }
 
-        // Check if file is an image
-        $image_info = getimagesize($file_path);
-        if (!$image_info) {
-            return array(
-                'success' => false,
-                'message' => 'Not a valid image',
-                'skipped' => true
-            );
-        }
+            // Check file size
+            $file_size = filesize($file_path);
+            $max_size = 10 * 1024 * 1024; // 10MB limit
+            if ($file_size > $max_size) {
+                return array(
+                    'success' => false,
+                    'message' => 'File too large (max 10MB)',
+                    'skipped' => true
+                );
+            }
 
-        // Check if WebP version already exists
-        $webp_path = $file_path . '.webp';
-        if (file_exists($webp_path)) {
-            return array(
-                'success' => true,
-                'message' => 'WebP version already exists',
-                'webp_url' => $this->path_to_url($webp_path),
-                'skipped' => true
-            );
-        }
+            // Check if file is an image
+            $image_info = @getimagesize($file_path);
+            if (!$image_info) {
+                return array(
+                    'success' => false,
+                    'message' => 'Not a valid image',
+                    'skipped' => true
+                );
+            }
 
-        // Get image type
-        $mime_type = $image_info['mime'];
-        $quality = get_option('kloudwebp_compression_quality', 80);
+            // Check image dimensions
+            list($width, $height) = $image_info;
+            $max_dimension = 5000; // 5000px limit
+            if ($width > $max_dimension || $height > $max_dimension) {
+                return array(
+                    'success' => false,
+                    'message' => 'Image dimensions too large (max 5000px)',
+                    'skipped' => true
+                );
+            }
 
-        // Try conversion with Imagick first if available
-        if (extension_loaded('imagick')) {
-            try {
-                $image = new Imagick($file_path);
-                $image->setImageFormat('webp');
-                $image->setImageCompressionQuality($quality);
-                $image->stripImage();
-                $success = $image->writeImage($webp_path);
-                $image->destroy();
+            // Check if WebP version already exists and is newer
+            $webp_path = $file_path . '.webp';
+            if (file_exists($webp_path) && filemtime($webp_path) >= filemtime($file_path)) {
+                return array(
+                    'success' => true,
+                    'message' => 'WebP version already exists and is up to date',
+                    'webp_url' => $this->path_to_url($webp_path),
+                    'skipped' => true
+                );
+            }
 
-                if ($success) {
+            // Get image type and quality settings
+            $mime_type = $image_info['mime'];
+            $quality = intval(get_option('kloudwebp_compression_quality', 80));
+            $quality = min(max($quality, 1), 100); // Ensure quality is between 1 and 100
+
+            // Try conversion with Imagick first if available
+            if (extension_loaded('imagick')) {
+                try {
+                    // Increase memory limit temporarily
+                    $mem_limit = ini_get('memory_limit');
+                    ini_set('memory_limit', '256M');
+
+                    $image = new Imagick($file_path);
+                    
+                    // Strip metadata to reduce file size
+                    $image->stripImage();
+                    
+                    // Optimize for web
+                    $image->setImageCompressionQuality($quality);
+                    $image->setOption('webp:method', '6'); // Best compression
+                    $image->setOption('webp:lossless', 'false');
+                    $image->setOption('webp:low-memory', 'true');
+                    
+                    // Convert to WebP
+                    $image->setImageFormat('webp');
+                    
+                    // Save optimized WebP
+                    $success = $image->writeImage($webp_path);
+                    $image->destroy();
+
+                    // Restore memory limit
+                    ini_set('memory_limit', $mem_limit);
+
+                    if ($success) {
+                        // Verify the WebP file is valid
+                        if (filesize($webp_path) > 0 && @getimagesize($webp_path)) {
+                            return array(
+                                'success' => true,
+                                'message' => 'Conversion successful with Imagick',
+                                'webp_url' => $this->path_to_url($webp_path),
+                                'skipped' => false
+                            );
+                        } else {
+                            @unlink($webp_path); // Remove invalid WebP file
+                            throw new Exception('Generated WebP file is invalid');
+                        }
+                    }
+                } catch (Exception $e) {
+                    $this->log_debug("Imagick conversion failed: " . $e->getMessage(), 'error');
+                    // Clean up any failed WebP file
+                    if (file_exists($webp_path)) {
+                        @unlink($webp_path);
+                    }
+                    // Continue to try GD
+                }
+            }
+
+            // Try GD if Imagick is not available or failed
+            if (extension_loaded('gd')) {
+                try {
+                    // Increase memory limit temporarily
+                    $mem_limit = ini_get('memory_limit');
+                    ini_set('memory_limit', '256M');
+
+                    // Create image resource based on type
+                    switch ($mime_type) {
+                        case 'image/jpeg':
+                            $image = imagecreatefromjpeg($file_path);
+                            break;
+                        case 'image/png':
+                            $image = imagecreatefrompng($file_path);
+                            // Handle transparency
+                            imagepalettetotruecolor($image);
+                            imagealphablending($image, true);
+                            imagesavealpha($image, true);
+                            break;
+                        default:
+                            return array(
+                                'success' => false,
+                                'message' => 'Unsupported image type: ' . $mime_type,
+                                'skipped' => true
+                            );
+                    }
+
+                    if ($image) {
+                        // Convert to WebP
+                        $success = imagewebp($image, $webp_path, $quality);
+                        imagedestroy($image);
+
+                        // Restore memory limit
+                        ini_set('memory_limit', $mem_limit);
+
+                        if ($success) {
+                            // Verify the WebP file is valid
+                            if (filesize($webp_path) > 0 && @getimagesize($webp_path)) {
+                                return array(
+                                    'success' => true,
+                                    'message' => 'Conversion successful with GD',
+                                    'webp_url' => $this->path_to_url($webp_path),
+                                    'skipped' => false
+                                );
+                            } else {
+                                @unlink($webp_path); // Remove invalid WebP file
+                                throw new Exception('Generated WebP file is invalid');
+                            }
+                        }
+                    }
+                } catch (Exception $e) {
+                    $this->log_debug("GD conversion failed: " . $e->getMessage(), 'error');
+                    // Clean up any failed WebP file
+                    if (file_exists($webp_path)) {
+                        @unlink($webp_path);
+                    }
                     return array(
-                        'success' => true,
-                        'message' => 'Conversion successful with Imagick',
-                        'webp_url' => $this->path_to_url($webp_path),
+                        'success' => false,
+                        'message' => 'GD conversion failed: ' . $e->getMessage(),
                         'skipped' => false
                     );
                 }
-            } catch (Exception $e) {
-                // If Imagick fails, we'll try GD below
             }
+
+            return array(
+                'success' => false,
+                'message' => 'No suitable image conversion method available',
+                'skipped' => false
+            );
+        } catch (Exception $e) {
+            $this->log_debug("Conversion error: " . $e->getMessage(), 'error');
+            return array(
+                'success' => false,
+                'message' => 'Conversion error: ' . $e->getMessage(),
+                'skipped' => false
+            );
         }
-
-        // Try GD if Imagick is not available or failed
-        if (extension_loaded('gd')) {
-            try {
-                // Create image resource based on type
-                switch ($mime_type) {
-                    case 'image/jpeg':
-                        $image = imagecreatefromjpeg($file_path);
-                        break;
-                    case 'image/png':
-                        $image = imagecreatefrompng($file_path);
-                        // Handle transparency
-                        imagepalettetotruecolor($image);
-                        imagealphablending($image, true);
-                        imagesavealpha($image, true);
-                        break;
-                    default:
-                        return array(
-                            'success' => false,
-                            'message' => 'Unsupported image type',
-                            'skipped' => true
-                        );
-                }
-
-                if ($image) {
-                    // Convert to WebP
-                    $success = imagewebp($image, $webp_path, $quality);
-                    imagedestroy($image);
-
-                    if ($success) {
-                        return array(
-                            'success' => true,
-                            'message' => 'Conversion successful with GD',
-                            'webp_url' => $this->path_to_url($webp_path),
-                            'skipped' => false
-                        );
-                    }
-                }
-            } catch (Exception $e) {
-                return array(
-                    'success' => false,
-                    'message' => 'GD conversion failed: ' . $e->getMessage(),
-                    'skipped' => false
-                );
-            }
-        }
-
-        return array(
-            'success' => false,
-            'message' => 'No suitable image conversion method available',
-            'skipped' => false
-        );
     }
 
     /**
      * Convert URL to file system path
      */
     private function url_to_path($url) {
-        // Remove query string
-        $url = preg_replace('/\?.*/', '', $url);
-        
-        // Get the upload directory info
-        $upload_dir = wp_upload_dir();
-        
-        // Convert URL to path
-        if (strpos($url, $upload_dir['baseurl']) === 0) {
-            return str_replace(
-                $upload_dir['baseurl'],
-                $upload_dir['basedir'],
-                $url
-            );
+        try {
+            // Remove query string and decode URL
+            $url = urldecode(preg_replace('/[?#].*/', '', $url));
+            
+            // Get the upload directory info
+            $upload_dir = wp_upload_dir();
+            $upload_dir_url = str_replace(['http:', 'https:'], '', $upload_dir['baseurl']);
+            $upload_dir_path = $upload_dir['basedir'];
+            
+            // Convert protocol-relative URL to absolute path
+            $url = str_replace(['http:', 'https:'], '', $url);
+            
+            // Try upload directory first
+            if (strpos($url, $upload_dir_url) !== false) {
+                return str_replace(
+                    $upload_dir_url,
+                    $upload_dir_path,
+                    $url
+                );
+            }
+            
+            // Handle relative URLs
+            if (strpos($url, '/') === 0) {
+                $site_root = $_SERVER['DOCUMENT_ROOT'] ?? ABSPATH;
+                return $site_root . $url;
+            }
+            
+            // Handle absolute URLs within site
+            $site_url = str_replace(['http:', 'https:'], '', get_site_url());
+            if (strpos($url, $site_url) !== false) {
+                return str_replace(
+                    $site_url,
+                    ABSPATH,
+                    $url
+                );
+            }
+            
+            return false;
+        } catch (Exception $e) {
+            $this->log_debug("URL to path conversion error: " . $e->getMessage(), 'error');
+            return false;
         }
-        
-        // Handle relative URLs
-        if (strpos($url, '/') === 0) {
-            return ABSPATH . ltrim($url, '/');
-        }
-        
-        return false;
     }
 
     /**
      * Convert file system path to URL
      */
     private function path_to_url($path) {
-        $upload_dir = wp_upload_dir();
-        return str_replace(
-            $upload_dir['basedir'],
-            $upload_dir['baseurl'],
-            $path
-        );
+        try {
+            $upload_dir = wp_upload_dir();
+            
+            // Convert upload directory path to URL
+            if (strpos($path, $upload_dir['basedir']) !== false) {
+                return str_replace(
+                    $upload_dir['basedir'],
+                    $upload_dir['baseurl'],
+                    $path
+                );
+            }
+            
+            // Convert WordPress root path to URL
+            if (strpos($path, ABSPATH) !== false) {
+                return str_replace(
+                    ABSPATH,
+                    get_site_url() . '/',
+                    $path
+                );
+            }
+            
+            // If path starts with document root
+            $doc_root = $_SERVER['DOCUMENT_ROOT'] ?? ABSPATH;
+            if (strpos($path, $doc_root) !== false) {
+                $site_url = get_site_url();
+                return str_replace(
+                    $doc_root,
+                    rtrim($site_url, '/'),
+                    $path
+                );
+            }
+            
+            return false;
+        } catch (Exception $e) {
+            $this->log_debug("Path to URL conversion error: " . $e->getMessage(), 'error');
+            return false;
+        }
+    }
+
+    /**
+     * Log debug message with proper error handling
+     */
+    private function log_debug($message, $type = 'info') {
+        try {
+            if (method_exists($this, 'log_message')) {
+                $this->log_message($message, $type);
+            } else {
+                error_log("KloudWebP: [$type] $message");
+            }
+        } catch (Exception $e) {
+            error_log("KloudWebP logging error: " . $e->getMessage());
+        }
     }
 
     /**
@@ -405,20 +551,5 @@ class KloudWebP_Converter {
                 )
             );
         }
-    }
-
-    /**
-     * Log debug message
-     */
-    private function log_debug($message, $type = 'info') {
-        if (!get_option('kloudwebp_debug_log', false)) {
-            return;
-        }
-
-        $log_file = KLOUDWEBP_PLUGIN_DIR . 'debug.log';
-        $timestamp = current_time('mysql');
-        $log_message = sprintf("[%s] [%s] %s\n", $timestamp, strtoupper($type), $message);
-        
-        error_log($log_message, 3, $log_file);
     }
 }

@@ -577,18 +577,26 @@ class KloudWebP_Admin {
         }
 
         try {
-            $result = $this->converter->convert_post($post_id);
+            $result = $this->converter->convert_post_images($post_id);
             if (is_wp_error($result)) {
                 throw new Exception($result->get_error_message());
             }
 
-            wp_send_json_success(array(
-                'message' => sprintf(
-                    __('Successfully converted images in post %d.', 'kloudwebp'),
-                    $post_id
-                ),
-                'status' => $result
-            ));
+            if ($result['success']) {
+                wp_send_json_success(array(
+                    'message' => sprintf(
+                        __('Successfully converted images in post %d.', 'kloudwebp'),
+                        $post_id
+                    ),
+                    'status' => $result['status'] ?? 'converted',
+                    'details' => $result
+                ));
+            } else {
+                wp_send_json_error(array(
+                    'message' => $result['message'] ?? __('Failed to convert images.', 'kloudwebp'),
+                    'details' => $result
+                ));
+            }
         } catch (Exception $e) {
             $this->log_debug('Error converting post ' . $post_id . ': ' . $e->getMessage(), 'error');
             wp_send_json_error(array(
@@ -633,11 +641,19 @@ class KloudWebP_Admin {
 
             foreach ($query->posts as $post_id) {
                 try {
-                    $result = $this->converter->convert_post($post_id);
+                    $result = $this->converter->convert_post_images($post_id);
                     if (is_wp_error($result)) {
                         throw new Exception($result->get_error_message());
                     }
-                    $converted++;
+                    if ($result['success']) {
+                        $converted++;
+                    } else {
+                        $errors[] = sprintf(
+                            __('Post %d: %s', 'kloudwebp'),
+                            $post_id,
+                            $result['message']
+                        );
+                    }
                 } catch (Exception $e) {
                     $errors[] = sprintf(
                         __('Error converting post %d: %s', 'kloudwebp'),
