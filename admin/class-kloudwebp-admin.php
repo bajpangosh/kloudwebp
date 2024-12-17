@@ -498,21 +498,50 @@ class KloudWebP_Admin {
         return $image;
     }
 
+    /**
+     * Convert URL to filesystem path
+     */
     private function url_to_path($url) {
         // Remove query strings
         $url = preg_replace('/\?.*/', '', $url);
         
         // Get upload directory info
         $upload_dir = wp_upload_dir();
-        
-        // Convert URL to path
-        $path = str_replace(
-            array($upload_dir['baseurl'], site_url()),
-            array($upload_dir['basedir'], ABSPATH),
+        $upload_base_url = $upload_dir['baseurl'];
+        $upload_base_dir = $upload_dir['basedir'];
+
+        // Handle both HTTP and HTTPS
+        $site_url = site_url();
+        $site_url_http = str_replace('https://', 'http://', $site_url);
+        $site_url_https = str_replace('http://', 'https://', $site_url);
+
+        $url = str_replace(
+            array($site_url_http, $site_url_https),
+            array($upload_base_dir, $upload_base_dir),
             $url
         );
+
+        // Convert URL path to filesystem path
+        $path = str_replace(
+            array($upload_base_url, WP_CONTENT_URL),
+            array($upload_base_dir, WP_CONTENT_DIR),
+            $url
+        );
+
+        // Normalize slashes
+        $path = wp_normalize_path($path);
         
-        return file_exists($path) ? $path : false;
+        // Check if file exists
+        if (!file_exists($path)) {
+            // Try direct path mapping
+            $direct_path = $upload_base_dir . parse_url($url, PHP_URL_PATH);
+            if (file_exists($direct_path)) {
+                return $direct_path;
+            }
+            return false;
+        }
+
+        return $path;
     }
 
     /**
@@ -737,14 +766,38 @@ class KloudWebP_Admin {
             $errors = array();
             $total = count($images['unconverted']);
             
+            if ($total === 0) {
+                wp_send_json_success(array(
+                    'message' => __('No images to convert', 'kloudwebp'),
+                    'converted' => 0,
+                    'total' => 0
+                ));
+                return;
+            }
+            
             foreach ($images['unconverted'] as $image) {
                 try {
+                    if (WP_DEBUG) {
+                        error_log("KloudWebP: Attempting to convert: " . $image['path']);
+                    }
+                    
                     $result = $this->converter->convert_image($image['path'], false);
                     if ($result) {
                         $converted++;
+                        if (WP_DEBUG) {
+                            error_log("KloudWebP: Successfully converted to: " . $result);
+                        }
+                    } else {
+                        $errors[] = sprintf(__('Failed to convert: %s', 'kloudwebp'), basename($image['path']));
+                        if (WP_DEBUG) {
+                            error_log("KloudWebP: Conversion failed for: " . $image['path']);
+                        }
                     }
                 } catch (Exception $e) {
                     $errors[] = $e->getMessage();
+                    if (WP_DEBUG) {
+                        error_log("KloudWebP: Conversion error: " . $e->getMessage());
+                    }
                 }
             }
             
@@ -759,6 +812,9 @@ class KloudWebP_Admin {
             wp_send_json_success($response);
             
         } catch (Exception $e) {
+            if (WP_DEBUG) {
+                error_log("KloudWebP: Error in handle_post_conversion: " . $e->getMessage());
+            }
             wp_send_json_error(array(
                 'message' => $e->getMessage(),
                 'errors' => array($e->getMessage())
@@ -825,22 +881,52 @@ class KloudWebP_Admin {
             }
         }
         
-        // Separate images into converted and unconverted
-        foreach ($images['all'] as $image) {
-            $file_path = $this->url_to_path($image);
-            if ($file_path) {
-                $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
-                if (file_exists($webp_path)) {
-                    $images['converted'][] = array(
-                        'url' => $image,
-                        'path' => $file_path
-                    );
-                } else {
-                    $images['unconverted'][] = array(
-                        'url' => $image,
-                        'path' => $file_path
-                    );
+        // Process and categorize images
+        $processed = array();
+        foreach ($images['all'] as $image_url) {
+            // Skip if already processed
+            if (in_array($image_url, $processed)) {
+                continue;
+            }
+            $processed[] = $image_url;
+            
+            $file_path = $this->url_to_path($image_url);
+            if (!$file_path) {
+                if (WP_DEBUG) {
+                    error_log("KloudWebP: Could not convert URL to path: " . $image_url);
                 }
+                continue;
+            }
+
+            // Check if original file exists and is supported
+            if (!file_exists($file_path)) {
+                if (WP_DEBUG) {
+                    error_log("KloudWebP: File does not exist: " . $file_path);
+                }
+                continue;
+            }
+
+            $mime_type = wp_check_filetype($file_path)['type'];
+            if (!in_array($mime_type, ['image/jpeg', 'image/png'])) {
+                if (WP_DEBUG) {
+                    error_log("KloudWebP: Unsupported mime type: " . $mime_type);
+                }
+                continue;
+            }
+
+            // Check for WebP version
+            $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
+            if (file_exists($webp_path)) {
+                $images['converted'][] = array(
+                    'url' => $image_url,
+                    'path' => $file_path,
+                    'webp_path' => $webp_path
+                );
+            } else {
+                $images['unconverted'][] = array(
+                    'url' => $image_url,
+                    'path' => $file_path
+                );
             }
         }
 

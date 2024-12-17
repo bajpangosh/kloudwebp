@@ -11,17 +11,14 @@ class KloudWebP_Converter {
     }
 
     public function convert_image($file_path, $update_url = false) {
-        // Check if auto-convert is enabled for automatic processes
-        if ($update_url && !get_option('kloudwebp_auto_convert', false)) {
-            return false;
-        }
-
         if (!file_exists($file_path)) {
             $this->log_error("File not found: $file_path");
             return false;
         }
 
-        $image_type = wp_check_filetype($file_path)['type'];
+        $image_info = wp_check_filetype($file_path);
+        $image_type = $image_info['type'];
+        
         if (!in_array($image_type, ['image/jpeg', 'image/png'])) {
             $this->log_error("Unsupported image type: $image_type");
             return false;
@@ -30,6 +27,19 @@ class KloudWebP_Converter {
         try {
             $webp_path = $this->get_webp_path($file_path);
             
+            // Create directory if it doesn't exist
+            $webp_dir = dirname($webp_path);
+            if (!file_exists($webp_dir)) {
+                wp_mkdir_p($webp_dir);
+            }
+
+            // Check if we can write to the directory
+            if (!is_writable($webp_dir)) {
+                $this->log_error("Directory not writable: $webp_dir");
+                return false;
+            }
+
+            $success = false;
             if (extension_loaded('imagick')) {
                 $success = $this->convert_with_imagick($file_path, $webp_path);
             } elseif (function_exists('imagewebp')) {
@@ -39,11 +49,23 @@ class KloudWebP_Converter {
                 return false;
             }
 
-            if ($success && $update_url) {
-                $this->update_attachment_url($file_path, $webp_path);
+            if ($success) {
+                // Verify the WebP file was created and is valid
+                if (!file_exists($webp_path) || filesize($webp_path) === 0) {
+                    $this->log_error("WebP file creation failed or file is empty: $webp_path");
+                    @unlink($webp_path); // Clean up empty file
+                    return false;
+                }
+
+                // Update attachment URL if requested
+                if ($update_url) {
+                    $this->update_attachment_url($file_path, $webp_path);
+                }
+
+                return $webp_path;
             }
 
-            return $success ? $webp_path : false;
+            return false;
         } catch (Exception $e) {
             $this->log_error("Conversion failed: " . $e->getMessage());
             return false;
@@ -51,45 +73,79 @@ class KloudWebP_Converter {
     }
 
     private function convert_with_imagick($file_path, $webp_path) {
-        $image = new Imagick($file_path);
-        $image->setImageFormat('webp');
-        $image->setImageCompressionQuality($this->quality);
-        
-        $success = $image->writeImage($webp_path);
-        $image->destroy();
+        try {
+            $image = new Imagick($file_path);
+            $image->setImageFormat('webp');
+            $image->setImageCompressionQuality($this->quality);
+            
+            // Strip metadata to reduce file size
+            $image->stripImage();
+            
+            // Optimize for web
+            $image->setImageInterlaceScheme(Imagick::INTERLACE_NO);
+            $image->setOption('webp:method', '6'); // Best compression
+            
+            $success = $image->writeImage($webp_path);
+            $image->destroy();
 
-        if ($success && !$this->keep_original) {
-            @unlink($file_path);
+            if ($success && !$this->keep_original) {
+                @unlink($file_path);
+            }
+
+            return $success;
+        } catch (Exception $e) {
+            $this->log_error("ImageMagick conversion failed: " . $e->getMessage());
+            return false;
         }
-
-        return $success;
     }
 
     private function convert_with_gd($file_path, $webp_path) {
-        $image_type = wp_check_filetype($file_path)['type'];
-        
-        switch ($image_type) {
-            case 'image/jpeg':
-                $image = imagecreatefromjpeg($file_path);
-                break;
-            case 'image/png':
-                $image = imagecreatefrompng($file_path);
-                imagepalettetotruecolor($image);
-                imagealphablending($image, true);
-                imagesavealpha($image, true);
-                break;
-            default:
+        try {
+            $image_type = wp_check_filetype($file_path)['type'];
+            
+            switch ($image_type) {
+                case 'image/jpeg':
+                    $image = imagecreatefromjpeg($file_path);
+                    break;
+                case 'image/png':
+                    $image = imagecreatefrompng($file_path);
+                    imagepalettetotruecolor($image);
+                    imagealphablending($image, true);
+                    imagesavealpha($image, true);
+                    break;
+                default:
+                    return false;
+            }
+
+            if (!$image) {
+                $this->log_error("Failed to create image resource from: $file_path");
                 return false;
+            }
+
+            // Set the background color to white for PNGs with alpha channel
+            if ($image_type === 'image/png') {
+                $background = imagecreatetruecolor(imagesx($image), imagesy($image));
+                $white = imagecolorallocate($background, 255, 255, 255);
+                imagefill($background, 0, 0, $white);
+                imagealphablending($background, true);
+                imagesavealpha($background, true);
+                imagecopy($background, $image, 0, 0, 0, 0, imagesx($image), imagesy($image));
+                imagedestroy($image);
+                $image = $background;
+            }
+
+            $success = imagewebp($image, $webp_path, $this->quality);
+            imagedestroy($image);
+
+            if ($success && !$this->keep_original) {
+                @unlink($file_path);
+            }
+
+            return $success;
+        } catch (Exception $e) {
+            $this->log_error("GD conversion failed: " . $e->getMessage());
+            return false;
         }
-
-        $success = imagewebp($image, $webp_path, $this->quality);
-        imagedestroy($image);
-
-        if ($success && !$this->keep_original) {
-            @unlink($file_path);
-        }
-
-        return $success;
     }
 
     private function get_webp_path($file_path) {
