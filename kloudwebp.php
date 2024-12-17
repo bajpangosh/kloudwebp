@@ -98,3 +98,82 @@ function kloudwebp_uninstall() {
     delete_option('kloudwebp_update_content');
 }
 register_uninstall_hook(__FILE__, 'kloudwebp_uninstall');
+
+// Add WebP support hooks
+add_action('init', 'kloudwebp_add_webp_support');
+add_filter('wp_get_attachment_url', 'kloudwebp_filter_attachment_url', 10, 2);
+add_filter('wp_calculate_image_srcset', 'kloudwebp_filter_image_srcset', 10, 5);
+
+/**
+ * Add WebP MIME type support
+ */
+function kloudwebp_add_webp_support() {
+    add_filter('upload_mimes', function($mimes) {
+        $mimes['webp'] = 'image/webp';
+        return $mimes;
+    });
+
+    add_filter('file_is_displayable_image', function($result, $path) {
+        if ($result === false && preg_match('/\.webp$/i', $path)) {
+            $result = true;
+        }
+        return $result;
+    }, 10, 2);
+}
+
+/**
+ * Filter attachment URLs to use WebP version if available
+ */
+function kloudwebp_filter_attachment_url($url, $attachment_id) {
+    // Only process if the setting is enabled
+    if (!get_option('kloudwebp_update_content', true)) {
+        return $url;
+    }
+
+    $webp_path = kloudwebp_get_webp_path($url);
+    if ($webp_path && file_exists($webp_path)) {
+        return kloudwebp_get_webp_url($url);
+    }
+
+    return $url;
+}
+
+/**
+ * Filter image srcset to include WebP versions
+ */
+function kloudwebp_filter_image_srcset($sources, $size_array, $image_src, $image_meta, $attachment_id) {
+    // Only process if the setting is enabled
+    if (!get_option('kloudwebp_update_content', true)) {
+        return $sources;
+    }
+
+    foreach ($sources as &$source) {
+        $webp_path = kloudwebp_get_webp_path($source['url']);
+        if ($webp_path && file_exists($webp_path)) {
+            $source['url'] = kloudwebp_get_webp_url($source['url']);
+        }
+    }
+
+    return $sources;
+}
+
+/**
+ * Get WebP file path from original URL
+ */
+function kloudwebp_get_webp_path($url) {
+    $upload_dir = wp_upload_dir();
+    $file_path = str_replace(
+        $upload_dir['baseurl'],
+        $upload_dir['basedir'],
+        $url
+    );
+    
+    return $file_path . '.webp';
+}
+
+/**
+ * Get WebP URL from original URL
+ */
+function kloudwebp_get_webp_url($url) {
+    return $url . '.webp';
+}

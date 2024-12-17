@@ -32,6 +32,7 @@ class KloudWebP_Converter {
         $failed = 0;
         $skipped = 0;
         $content = $post->post_content;
+        $updated_urls = array();
 
         foreach ($images as $image) {
             $result = $this->convert_image($image['url']);
@@ -39,13 +40,22 @@ class KloudWebP_Converter {
             if ($result['success']) {
                 $converted++;
                 
-                // Update post content if setting is enabled
-                if (get_option('kloudwebp_update_content', true)) {
-                    $content = str_replace(
-                        $image['url'],
-                        $result['webp_url'],
-                        $content
-                    );
+                // Store original and WebP URLs for replacement
+                $updated_urls[$image['url']] = $result['webp_url'];
+                
+                // Update image srcset if exists
+                if (!empty($image['srcset'])) {
+                    $srcset_urls = explode(',', $image['srcset']);
+                    foreach ($srcset_urls as $srcset_url) {
+                        $parts = preg_split('/\s+/', trim($srcset_url));
+                        if (count($parts) >= 1) {
+                            $src_url = $parts[0];
+                            $srcset_result = $this->convert_image($src_url);
+                            if ($srcset_result['success']) {
+                                $updated_urls[$src_url] = $srcset_result['webp_url'];
+                            }
+                        }
+                    }
                 }
             } elseif ($result['skipped']) {
                 $skipped++;
@@ -54,8 +64,47 @@ class KloudWebP_Converter {
             }
         }
 
-        // Update post content if any conversions were successful
-        if ($converted > 0 && get_option('kloudwebp_update_content', true)) {
+        // Update post content if setting is enabled and we have conversions
+        if ($converted > 0 && get_option('kloudwebp_update_content', true) && !empty($updated_urls)) {
+            // Update image tags with WebP sources
+            foreach ($images as $image) {
+                $original_tag = $image['tag'];
+                $new_tag = $original_tag;
+
+                // Update src attribute
+                if (isset($updated_urls[$image['url']])) {
+                    $new_tag = str_replace(
+                        'src="' . $image['url'] . '"',
+                        'src="' . $updated_urls[$image['url']] . '"',
+                        $new_tag
+                    );
+                }
+
+                // Update srcset attribute if exists
+                if (!empty($image['srcset'])) {
+                    $new_srcset = $image['srcset'];
+                    foreach ($updated_urls as $original => $webp) {
+                        $new_srcset = str_replace($original, $webp, $new_srcset);
+                    }
+                    $new_tag = str_replace(
+                        'srcset="' . $image['srcset'] . '"',
+                        'srcset="' . $new_srcset . '"',
+                        $new_tag
+                    );
+                }
+
+                // Add picture tag for better browser support
+                if ($new_tag !== $original_tag) {
+                    $picture_tag = '<picture>';
+                    $picture_tag .= '<source srcset="' . $updated_urls[$image['url']] . '" type="image/webp">';
+                    $picture_tag .= $original_tag; // Original img tag as fallback
+                    $picture_tag .= '</picture>';
+                    
+                    $content = str_replace($original_tag, $picture_tag, $content);
+                }
+            }
+
+            // Update post content
             wp_update_post(array(
                 'ID' => $post_id,
                 'post_content' => $content
@@ -82,20 +131,30 @@ class KloudWebP_Converter {
     private function get_images_from_content($content) {
         $images = array();
         
-        // Regular expression to find image tags
-        if (preg_match_all('/<img[^>]+>/i', $content, $img_tags)) {
+        // Regular expression to find image tags with optional srcset
+        if (preg_match_all('/<img[^>]+>/', $content, $img_tags)) {
             foreach ($img_tags[0] as $img_tag) {
+                $image_data = array(
+                    'tag' => $img_tag,
+                    'url' => '',
+                    'srcset' => ''
+                );
+
                 // Get src attribute
                 if (preg_match('/src=[\'"]([^\'"]+)[\'"]/', $img_tag, $match)) {
                     $url = $match[1];
-                    
-                    // Only process internal images
                     if ($this->is_internal_image($url)) {
-                        $images[] = array(
-                            'tag' => $img_tag,
-                            'url' => $url
-                        );
+                        $image_data['url'] = $url;
                     }
+                }
+
+                // Get srcset attribute
+                if (preg_match('/srcset=[\'"]([^\'"]+)[\'"]/', $img_tag, $match)) {
+                    $image_data['srcset'] = $match[1];
+                }
+
+                if (!empty($image_data['url'])) {
+                    $images[] = $image_data;
                 }
             }
         }
