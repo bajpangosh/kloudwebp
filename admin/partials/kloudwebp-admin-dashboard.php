@@ -13,16 +13,40 @@ if (!defined('WPINC')) {
     <!-- Statistics Cards -->
     <div class="kloudwebp-stats-cards">
         <div class="stats-card">
-            <h3><?php _e('Total Images'); ?></h3>
+            <h3><?php _e('Total Images', 'kloudwebp'); ?></h3>
             <div class="stat-value"><?php echo $this->get_total_images_count(); ?></div>
         </div>
         <div class="stats-card">
-            <h3><?php _e('Converted Images'); ?></h3>
+            <h3><?php _e('Converted Images', 'kloudwebp'); ?></h3>
             <div class="stat-value"><?php echo $this->get_converted_images_count(); ?></div>
         </div>
         <div class="stats-card">
-            <h3><?php _e('Space Saved'); ?></h3>
+            <h3><?php _e('Space Saved', 'kloudwebp'); ?></h3>
             <div class="stat-value"><?php echo size_format($this->get_total_space_saved()); ?></div>
+        </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="kloudwebp-actions">
+        <div class="action-buttons">
+            <?php 
+            $total_images = $this->get_total_images_count();
+            $converted_images = $this->get_converted_images_count();
+            $unconverted = $total_images - $converted_images;
+            
+            if ($unconverted > 0) : ?>
+                <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" class="inline-form">
+                    <?php wp_nonce_field('kloudwebp_bulk_convert', 'kloudwebp_nonce'); ?>
+                    <input type="hidden" name="action" value="kloudwebp_bulk_convert">
+                    <button type="submit" class="button button-primary">
+                        <?php printf(__('Convert All Images (%d remaining)', 'kloudwebp'), $unconverted); ?>
+                    </button>
+                </form>
+            <?php endif; ?>
+
+            <a href="<?php echo admin_url('admin.php?page=' . $this->plugin_name . '-settings'); ?>" class="button">
+                <?php _e('Settings', 'kloudwebp'); ?>
+            </a>
         </div>
     </div>
 
@@ -30,15 +54,15 @@ if (!defined('WPINC')) {
     <div class="tablenav top">
         <div class="alignleft actions">
             <select id="post-type-filter">
-                <option value=""><?php _e('All Content Types'); ?></option>
-                <option value="post"><?php _e('Posts'); ?></option>
-                <option value="page"><?php _e('Pages'); ?></option>
+                <option value=""><?php _e('All Content Types', 'kloudwebp'); ?></option>
+                <option value="post"><?php _e('Posts', 'kloudwebp'); ?></option>
+                <option value="page"><?php _e('Pages', 'kloudwebp'); ?></option>
             </select>
             <select id="conversion-status-filter">
-                <option value=""><?php _e('All Statuses'); ?></option>
-                <option value="unconverted"><?php _e('Needs Conversion'); ?></option>
-                <option value="partial"><?php _e('Partially Converted'); ?></option>
-                <option value="converted"><?php _e('Fully Converted'); ?></option>
+                <option value=""><?php _e('All Statuses', 'kloudwebp'); ?></option>
+                <option value="unconverted"><?php _e('Needs Conversion', 'kloudwebp'); ?></option>
+                <option value="partial"><?php _e('Partially Converted', 'kloudwebp'); ?></option>
+                <option value="converted"><?php _e('Fully Converted', 'kloudwebp'); ?></option>
             </select>
         </div>
     </div>
@@ -47,23 +71,24 @@ if (!defined('WPINC')) {
     <?php
     $posts = $this->get_posts_conversion_status();
     if (empty($posts)): ?>
-        <p><?php _e('No posts or pages with images found.'); ?></p>
+        <p><?php _e('No posts or pages with images found.', 'kloudwebp'); ?></p>
     <?php else: ?>
         <table class="wp-list-table widefat fixed striped kloudwebp-posts-table">
             <thead>
                 <tr>
-                    <th><?php _e('Title'); ?></th>
-                    <th><?php _e('Type'); ?></th>
-                    <th><?php _e('Images'); ?></th>
-                    <th><?php _e('Conversion Progress'); ?></th>
-                    <th><?php _e('Last Modified'); ?></th>
-                    <th><?php _e('Actions'); ?></th>
+                    <th><?php _e('Title', 'kloudwebp'); ?></th>
+                    <th><?php _e('Type', 'kloudwebp'); ?></th>
+                    <th><?php _e('Images', 'kloudwebp'); ?></th>
+                    <th><?php _e('Conversion Progress', 'kloudwebp'); ?></th>
+                    <th><?php _e('Last Modified', 'kloudwebp'); ?></th>
+                    <th><?php _e('Actions', 'kloudwebp'); ?></th>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($posts as $post) : 
-                    $total_images = $this->get_total_images_count($post->ID);
-                    $converted_images = $this->get_converted_images_count($post->ID);
+                    $images = $this->get_post_images($post->ID);
+                    $total_images = count($images['all']);
+                    $converted_images = count($images['converted']);
                     $percentage = $total_images > 0 ? round(($converted_images / $total_images) * 100) : 0;
                 ?>
                     <tr>
@@ -76,13 +101,15 @@ if (!defined('WPINC')) {
                             <div class="conversion-progress-bar">
                                 <div class="conversion-progress" style="width: <?php echo $percentage; ?>%"></div>
                             </div>
+                            <span class="progress-text"><?php echo $percentage; ?>%</span>
                         </td>
                         <td><?php echo get_the_modified_date('Y-m-d H:i:s', $post->ID); ?></td>
                         <td>
                             <?php if ($total_images > $converted_images) : ?>
                                 <button class="button button-primary kloudwebp-convert-post" 
-                                        data-post-id="<?php echo $post->ID; ?>">
-                                    <?php _e('Convert'); ?>
+                                        data-post-id="<?php echo $post->ID; ?>"
+                                        data-nonce="<?php echo wp_create_nonce('kloudwebp_convert_nonce'); ?>">
+                                    <?php _e('Convert', 'kloudwebp'); ?>
                                 </button>
                             <?php endif; ?>
                         </td>
@@ -98,7 +125,7 @@ if (!defined('WPINC')) {
     display: flex;
     flex-wrap: wrap;
     gap: 20px;
-    margin-bottom: 40px;
+    margin-bottom: 20px;
 }
 
 .stats-card {
@@ -108,12 +135,13 @@ if (!defined('WPINC')) {
     padding: 20px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     width: calc(33.33% - 20px);
+    text-align: center;
 }
 
 .stats-card h3 {
-    margin-top: 0;
-    margin-bottom: 20px;
-    color: #1d2327;
+    margin: 0 0 10px;
+    font-size: 14px;
+    color: #646970;
 }
 
 .stat-value {
@@ -122,42 +150,74 @@ if (!defined('WPINC')) {
     color: #2271b1;
 }
 
-.tablenav.top {
+.kloudwebp-actions {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 20px;
     margin-bottom: 20px;
 }
 
-.kloudwebp-posts-table {
-    margin-bottom: 40px;
+.action-buttons {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.inline-form {
+    margin: 0;
+    padding: 0;
+}
+
+.tablenav.top {
+    margin: 15px 0;
 }
 
 .conversion-progress-bar {
+    width: 100%;
+    height: 8px;
     background: #f0f0f1;
     border-radius: 4px;
-    height: 8px;
-    margin-bottom: 15px;
     overflow: hidden;
+    margin-bottom: 4px;
 }
 
 .conversion-progress {
-    background: #2271b1;
     height: 100%;
+    background: #2271b1;
     transition: width 0.3s ease;
+}
+
+.progress-text {
+    font-size: 12px;
+    color: #646970;
+}
+
+.kloudwebp-posts-table {
+    margin-top: 15px;
+}
+
+.kloudwebp-posts-table td {
+    vertical-align: middle;
 }
 
 .column-images {
     text-align: center;
 }
 
-.button.button-primary.kloudwebp-convert-post {
-    padding: 8px 16px;
-    font-size: 14px;
-    font-weight: bold;
-    border-radius: 4px;
-    cursor: pointer;
-}
-
-.button.button-primary.kloudwebp-convert-post:hover {
-    background-color: #1d2327;
-    color: #fff;
+@media screen and (max-width: 782px) {
+    .stats-card {
+        width: 100%;
+    }
+    
+    .action-buttons {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .action-buttons .button {
+        width: 100%;
+        text-align: center;
+    }
 }
 </style>
