@@ -1,370 +1,373 @@
 <?php
-
+/**
+ * KloudWebP Admin Class
+ * Handles all admin functionality including dashboard and settings
+ */
 class KloudWebP_Admin {
-    private $plugin_name;
-    private $version;
-    private $converter;
-
-    public function __construct($plugin_name, $version) {
-        $this->plugin_name = $plugin_name;
-        $this->version = $version;
-        $this->converter = new KloudWebP_Converter();
-
-        // Add menu
-        add_action('admin_menu', array($this, 'add_plugin_menu'));
-        
+    /**
+     * Initialize the admin class
+     */
+    public function __construct() {
+        // Add menu items
+        add_action('admin_menu', array($this, 'add_admin_menu'));
         // Register settings
         add_action('admin_init', array($this, 'register_settings'));
-        
-        // Add settings link
-        add_filter('plugin_action_links_' . plugin_basename(KLOUDWEBP_PLUGIN_DIR . $this->plugin_name . '.php'),
-            array($this, 'add_action_links')
-        );
-
-        // Handle AJAX actions
-        add_action('wp_ajax_kloudwebp_convert_post', array($this, 'handle_post_conversion'));
-        add_action('wp_ajax_kloudwebp_get_stats', array($this, 'handle_get_stats'));
-        
-        // Enqueue scripts
-        add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
+        // Add admin scripts and styles
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_assets'));
+        // Add AJAX handlers
+        add_action('wp_ajax_kloudwebp_convert_single', array($this, 'ajax_convert_single'));
+        add_action('wp_ajax_kloudwebp_convert_bulk', array($this, 'ajax_convert_bulk'));
+        add_action('wp_ajax_kloudwebp_get_conversion_status', array($this, 'ajax_get_conversion_status'));
     }
 
-    public function add_plugin_menu() {
+    /**
+     * Add admin menu items
+     */
+    public function add_admin_menu() {
         add_menu_page(
             __('KloudWebP', 'kloudwebp'),
             __('KloudWebP', 'kloudwebp'),
             'manage_options',
-            $this->plugin_name,
-            array($this, 'display_dashboard_page'),
+            'kloudwebp',
+            array($this, 'render_dashboard_page'),
             'dashicons-images-alt2'
         );
 
         add_submenu_page(
-            $this->plugin_name,
+            'kloudwebp',
             __('Settings', 'kloudwebp'),
             __('Settings', 'kloudwebp'),
             'manage_options',
-            $this->plugin_name . '-settings',
-            array($this, 'display_settings_page')
+            'kloudwebp-settings',
+            array($this, 'render_settings_page')
         );
     }
 
+    /**
+     * Register plugin settings
+     */
     public function register_settings() {
-        register_setting(
-            'kloudwebp_settings',
-            'kloudwebp_settings',
-            array($this, 'sanitize_settings')
-        );
-
-        add_settings_section(
-            'kloudwebp_general_section',
-            __('General Settings', 'kloudwebp'),
-            array($this, 'render_settings_section'),
-            'kloudwebp_settings'
-        );
-
-        add_settings_field(
-            'kloudwebp_quality',
-            __('WebP Quality', 'kloudwebp'),
-            array($this, 'render_quality_field'),
-            'kloudwebp_settings',
-            'kloudwebp_general_section'
-        );
-
-        add_settings_field(
-            'kloudwebp_keep_original',
-            __('Keep Original Images', 'kloudwebp'),
-            array($this, 'render_keep_original_field'),
-            'kloudwebp_settings',
-            'kloudwebp_general_section'
-        );
+        register_setting('kloudwebp_settings', 'kloudwebp_compression_quality');
+        register_setting('kloudwebp_settings', 'kloudwebp_update_content');
     }
 
-    public function sanitize_settings($input) {
-        $sanitized = array();
-        
-        if (isset($input['quality'])) {
-            $sanitized['quality'] = intval($input['quality']);
-            if ($sanitized['quality'] < 1 || $sanitized['quality'] > 100) {
-                $sanitized['quality'] = 80;
-            }
-        }
-        
-        if (isset($input['keep_original'])) {
-            $sanitized['keep_original'] = (bool) $input['keep_original'];
-        }
-        
-        return $sanitized;
-    }
-
-    public function enqueue_scripts($hook) {
-        // Only load on plugin pages
-        if (strpos($hook, $this->plugin_name) === false) {
+    /**
+     * Enqueue admin assets
+     */
+    public function enqueue_admin_assets($hook) {
+        if (strpos($hook, 'kloudwebp') === false) {
             return;
         }
 
         wp_enqueue_style(
-            $this->plugin_name,
-            plugin_dir_url(__FILE__) . 'css/kloudwebp-admin.css',
+            'kloudwebp-admin',
+            KLOUDWEBP_PLUGIN_URL . 'admin/css/kloudwebp-admin.css',
             array(),
-            $this->version,
-            'all'
+            KLOUDWEBP_VERSION
         );
 
         wp_enqueue_script(
-            $this->plugin_name,
-            plugin_dir_url(__FILE__) . 'js/kloudwebp-admin.js',
+            'kloudwebp-admin',
+            KLOUDWEBP_PLUGIN_URL . 'admin/js/kloudwebp-admin.js',
             array('jquery'),
-            $this->version,
+            KLOUDWEBP_VERSION,
             true
         );
 
-        wp_localize_script(
-            $this->plugin_name,
-            'kloudwebpAjax',
-            array(
-                'ajaxurl' => admin_url('admin-ajax.php'),
-                'nonce' => wp_create_nonce('kloudwebp_convert_nonce'),
+        wp_localize_script('kloudwebp-admin', 'kloudwebpAjax', array(
+            'ajaxurl' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('kloudwebp-ajax-nonce'),
+            'strings' => array(
                 'converting' => __('Converting...', 'kloudwebp'),
-                'convert' => __('Convert', 'kloudwebp'),
+                'converted' => __('Converted', 'kloudwebp'),
                 'error' => __('Error', 'kloudwebp'),
-                'success' => __('Converted', 'kloudwebp')
             )
-        );
+        ));
     }
 
-    public function display_dashboard_page() {
-        require_once plugin_dir_path(__FILE__) . 'partials/kloudwebp-admin-dashboard.php';
+    /**
+     * Render dashboard page
+     */
+    public function render_dashboard_page() {
+        ?>
+        <div class="wrap">
+            <h1><?php _e('KloudWebP Dashboard', 'kloudwebp'); ?></h1>
+            
+            <div class="kloudwebp-bulk-actions">
+                <button id="kloudwebp-bulk-convert" class="button button-primary">
+                    <?php _e('Bulk Convert All Images', 'kloudwebp'); ?>
+                </button>
+            </div>
+
+            <div class="kloudwebp-log-container">
+                <h3><?php _e('Conversion Log', 'kloudwebp'); ?></h3>
+                <div id="kloudwebp-log" class="kloudwebp-log"></div>
+            </div>
+
+            <div class="kloudwebp-conversion-table">
+                <h3><?php _e('Posts and Pages', 'kloudwebp'); ?></h3>
+                <?php $this->render_conversion_table(); ?>
+            </div>
+        </div>
+        <?php
     }
 
-    public function display_settings_page() {
-        require_once plugin_dir_path(__FILE__) . 'partials/kloudwebp-admin-settings.php';
+    /**
+     * Render settings page
+     */
+    public function render_settings_page() {
+        ?>
+        <div class="wrap">
+            <h1><?php _e('KloudWebP Settings', 'kloudwebp'); ?></h1>
+            
+            <form method="post" action="options.php">
+                <?php
+                settings_fields('kloudwebp_settings');
+                do_settings_sections('kloudwebp_settings');
+                ?>
+                
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">
+                            <label for="kloudwebp_compression_quality">
+                                <?php _e('WebP Compression Quality', 'kloudwebp'); ?>
+                            </label>
+                        </th>
+                        <td>
+                            <input type="number" 
+                                   id="kloudwebp_compression_quality" 
+                                   name="kloudwebp_compression_quality" 
+                                   value="<?php echo esc_attr(get_option('kloudwebp_compression_quality', 80)); ?>"
+                                   min="1" 
+                                   max="100" 
+                                   class="small-text">
+                            <p class="description">
+                                <?php _e('Quality setting for WebP conversion (1-100). Higher values mean better quality but larger file size.', 'kloudwebp'); ?>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">
+                            <?php _e('Update Post Content', 'kloudwebp'); ?>
+                        </th>
+                        <td>
+                            <label>
+                                <input type="checkbox" 
+                                       name="kloudwebp_update_content" 
+                                       value="1" 
+                                       <?php checked(get_option('kloudwebp_update_content', true)); ?>>
+                                <?php _e('Replace original image URLs with WebP versions in post content', 'kloudwebp'); ?>
+                            </label>
+                        </td>
+                    </tr>
+                </table>
+                
+                <?php submit_button(); ?>
+            </form>
+        </div>
+        <?php
     }
 
-    public function get_posts_conversion_status() {
+    /**
+     * Render conversion table
+     */
+    private function render_conversion_table() {
+        $posts_per_page = 20;
+        $current_page = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1;
+        
         $args = array(
             'post_type' => array('post', 'page'),
-            'post_status' => 'publish',
-            'posts_per_page' => -1
-        );
-
-        $posts = get_posts($args);
-        return $posts;
-    }
-
-    public function get_post_images($post_id) {
-        $post = get_post($post_id);
-        $images = array(
-            'all' => array(),
-            'converted' => array(),
-            'unconverted' => array()
+            'posts_per_page' => $posts_per_page,
+            'paged' => $current_page,
+            'orderby' => 'date',
+            'order' => 'DESC',
         );
         
-        if (!$post) {
-            return $images;
-        }
+        $query = new WP_Query($args);
         
-        // Get images from post content
-        if (has_blocks($post->post_content)) {
-            $blocks = parse_blocks($post->post_content);
-            $this->extract_images_from_blocks($blocks, $images);
-        } else {
-            preg_match_all('/<img[^>]+>/i', $post->post_content, $img_matches);
-            foreach ($img_matches[0] as $img) {
-                preg_match('/src=[\'"]([^\'"]+)/i', $img, $src_match);
-                if (isset($src_match[1])) {
-                    $images['all'][] = $src_match[1];
-                }
-            }
-        }
+        if ($query->have_posts()) :
+        ?>
+        <table class="wp-list-table widefat fixed striped">
+            <thead>
+                <tr>
+                    <th><?php _e('ID', 'kloudwebp'); ?></th>
+                    <th><?php _e('Title', 'kloudwebp'); ?></th>
+                    <th><?php _e('Type', 'kloudwebp'); ?></th>
+                    <th><?php _e('Status', 'kloudwebp'); ?></th>
+                    <th><?php _e('Actions', 'kloudwebp'); ?></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php while ($query->have_posts()) : $query->the_post(); ?>
+                    <?php
+                    $post_id = get_the_ID();
+                    $status = $this->get_conversion_status($post_id);
+                    $status_class = $this->get_status_class($status);
+                    ?>
+                    <tr id="post-<?php echo $post_id; ?>">
+                        <td><?php echo $post_id; ?></td>
+                        <td>
+                            <strong>
+                                <a href="<?php echo get_edit_post_link($post_id); ?>">
+                                    <?php echo get_the_title(); ?>
+                                </a>
+                            </strong>
+                        </td>
+                        <td><?php echo get_post_type(); ?></td>
+                        <td class="kloudwebp-status <?php echo $status_class; ?>">
+                            <?php echo $this->get_status_label($status); ?>
+                        </td>
+                        <td>
+                            <button class="button kloudwebp-convert-single" 
+                                    data-post-id="<?php echo $post_id; ?>">
+                                <?php _e('Convert to WebP', 'kloudwebp'); ?>
+                            </button>
+                        </td>
+                    </tr>
+                <?php endwhile; ?>
+            </tbody>
+        </table>
         
-        // Get featured image
-        if (has_post_thumbnail($post_id)) {
-            $featured_image_id = get_post_thumbnail_id($post_id);
-            $featured_image = wp_get_attachment_image_src($featured_image_id, 'full');
-            if ($featured_image) {
-                $images['all'][] = $featured_image[0];
-            }
-        }
+        <?php
+        echo '<div class="tablenav bottom">';
+        echo '<div class="tablenav-pages">';
+        echo paginate_links(array(
+            'base' => add_query_arg('paged', '%#%'),
+            'format' => '',
+            'prev_text' => __('&laquo;'),
+            'next_text' => __('&raquo;'),
+            'total' => $query->max_num_pages,
+            'current' => $current_page,
+        ));
+        echo '</div>';
+        echo '</div>';
         
-        // Process images
-        foreach ($images['all'] as $image_url) {
-            $file_path = $this->url_to_path($image_url);
-            if ($file_path) {
-                $webp_path = preg_replace('/\.(jpe?g|png)$/i', '.webp', $file_path);
-                if (file_exists($webp_path)) {
-                    $images['converted'][] = array(
-                        'url' => $image_url,
-                        'path' => $file_path
-                    );
-                } else {
-                    $images['unconverted'][] = array(
-                        'url' => $image_url,
-                        'path' => $file_path
-                    );
-                }
-            }
-        }
-
-        return $images;
+        wp_reset_postdata();
+        
+        else:
+            echo '<p>' . __('No posts or pages found.', 'kloudwebp') . '</p>';
+        endif;
     }
 
-    private function extract_images_from_blocks($blocks, &$images) {
-        foreach ($blocks as $block) {
-            if ($block['blockName'] === 'core/image') {
-                if (!empty($block['attrs']['url'])) {
-                    $images['all'][] = $block['attrs']['url'];
-                }
-            }
-            if (!empty($block['innerBlocks'])) {
-                $this->extract_images_from_blocks($block['innerBlocks'], $images);
-            }
+    /**
+     * Get conversion status for a post
+     */
+    private function get_conversion_status($post_id) {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'kloudwebp_conversions';
+        
+        $status = $wpdb->get_var($wpdb->prepare(
+            "SELECT status FROM $table_name WHERE post_id = %d",
+            $post_id
+        ));
+        
+        return $status ? $status : 'not_converted';
+    }
+
+    /**
+     * Get status class for CSS
+     */
+    private function get_status_class($status) {
+        switch ($status) {
+            case 'converted':
+                return 'status-success';
+            case 'partially_converted':
+                return 'status-warning';
+            case 'not_converted':
+                return 'status-error';
+            case 'no_images':
+                return 'status-neutral';
+            default:
+                return '';
         }
     }
 
-    private function url_to_path($url) {
-        // Remove query strings
-        $url = preg_replace('/\?.*/', '', $url);
-        
-        // Get upload directory info
-        $upload_dir = wp_upload_dir();
-        
-        // Convert URL to path
-        $path = str_replace(
-            array($upload_dir['baseurl'], site_url()),
-            array($upload_dir['basedir'], ABSPATH),
-            $url
-        );
-        
-        return file_exists($path) ? $path : false;
+    /**
+     * Get human-readable status label
+     */
+    private function get_status_label($status) {
+        switch ($status) {
+            case 'converted':
+                return __('Converted', 'kloudwebp');
+            case 'partially_converted':
+                return __('Partially Converted', 'kloudwebp');
+            case 'not_converted':
+                return __('Not Converted', 'kloudwebp');
+            case 'no_images':
+                return __('No Images', 'kloudwebp');
+            default:
+                return __('Unknown', 'kloudwebp');
+        }
     }
 
-    public function handle_post_conversion() {
-        check_ajax_referer('kloudwebp_convert_nonce', 'nonce');
+    /**
+     * AJAX handler for single post conversion
+     */
+    public function ajax_convert_single() {
+        check_ajax_referer('kloudwebp-ajax-nonce', 'nonce');
         
         if (!current_user_can('manage_options')) {
-            wp_send_json_error('Insufficient permissions');
-            return;
+            wp_send_json_error('Unauthorized');
         }
 
         $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
         if (!$post_id) {
             wp_send_json_error('Invalid post ID');
-            return;
         }
 
-        try {
-            $images = $this->get_post_images($post_id);
-            $converted = 0;
-            $errors = array();
-            $total = count($images['unconverted']);
-            
-            foreach ($images['unconverted'] as $image) {
-                try {
-                    $result = $this->converter->convert_image($image['path'], false);
-                    if ($result) {
-                        $converted++;
-                    }
-                } catch (Exception $e) {
-                    $errors[] = $e->getMessage();
-                }
-            }
-            
-            wp_send_json_success(array(
-                'message' => sprintf(__('%d out of %d images converted successfully', 'kloudwebp'), $converted, $total),
-                'converted' => $converted,
-                'total' => $total,
-                'errors' => $errors
-            ));
-            
-        } catch (Exception $e) {
-            wp_send_json_error(array(
-                'message' => $e->getMessage(),
-                'errors' => array($e->getMessage())
-            ));
-        }
-    }
+        // Initialize the converter and process images
+        require_once KLOUDWEBP_PLUGIN_DIR . 'includes/class-kloudwebp-converter.php';
+        $converter = new KloudWebP_Converter();
+        $result = $converter->convert_post_images($post_id);
 
-    public function handle_get_stats() {
-        check_ajax_referer('kloudwebp_convert_nonce', 'nonce');
-        
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error('Insufficient permissions');
-            return;
-        }
-        
-        wp_send_json_success(array(
-            'total_images' => $this->get_total_images_count(),
-            'converted_images' => $this->get_converted_images_count(),
-            'space_saved' => size_format($this->get_total_space_saved())
-        ));
-    }
-
-    public function get_total_images_count() {
-        $args = array(
-            'post_type' => 'attachment',
-            'post_mime_type' => array('image/jpeg', 'image/png'),
-            'posts_per_page' => -1,
-            'fields' => 'ids'
-        );
-        
-        $query = new WP_Query($args);
-        return $query->found_posts;
-    }
-
-    public function get_converted_images_count() {
-        $args = array(
-            'post_type' => 'attachment',
-            'post_mime_type' => array('image/jpeg', 'image/png'),
-            'posts_per_page' => -1,
-            'meta_query' => array(
-                array(
-                    'key' => '_webp_converted',
-                    'compare' => 'EXISTS'
-                )
-            ),
-            'fields' => 'ids'
-        );
-        
-        $query = new WP_Query($args);
-        return $query->found_posts;
-    }
-
-    public function get_total_space_saved() {
-        $args = array(
-            'post_type' => 'attachment',
-            'post_mime_type' => array('image/jpeg', 'image/png'),
-            'posts_per_page' => -1,
-            'meta_query' => array(
-                array(
-                    'key' => '_webp_size_saved',
-                    'compare' => 'EXISTS'
-                )
-            )
-        );
-        
-        $query = new WP_Query($args);
-        $total_saved = 0;
-        
-        foreach ($query->posts as $post) {
-            $saved = get_post_meta($post->ID, '_webp_size_saved', true);
-            if ($saved) {
-                $total_saved += intval($saved);
-            }
-        }
-        
-        return $total_saved;
+        wp_send_json_success($result);
     }
 
     /**
-     * Add settings link to plugin page
-     *
-     * @param array $links Array of plugin action links
-     * @return array Modified array of plugin action links
+     * AJAX handler for bulk conversion
      */
-    public function add_action_links($links) {
-        $settings_link = '<a href="' . admin_url('options-general.php?page=kloudwebp') . '">' . __('Settings', 'kloudwebp') . '</a>';
-        array_unshift($links, $settings_link);
-        return $links;
+    public function ajax_convert_bulk() {
+        check_ajax_referer('kloudwebp-ajax-nonce', 'nonce');
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Unauthorized');
+        }
+
+        // Get posts/pages that need conversion
+        $args = array(
+            'post_type' => array('post', 'page'),
+            'posts_per_page' => -1,
+            'fields' => 'ids',
+        );
+
+        $post_ids = get_posts($args);
+        
+        wp_send_json_success(array(
+            'total' => count($post_ids),
+            'ids' => $post_ids,
+        ));
+    }
+
+    /**
+     * AJAX handler for getting conversion status
+     */
+    public function ajax_get_conversion_status() {
+        check_ajax_referer('kloudwebp-ajax-nonce', 'nonce');
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Unauthorized');
+        }
+
+        $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+        if (!$post_id) {
+            wp_send_json_error('Invalid post ID');
+        }
+
+        $status = $this->get_conversion_status($post_id);
+        wp_send_json_success(array(
+            'status' => $status,
+            'label' => $this->get_status_label($status),
+            'class' => $this->get_status_class($status),
+        ));
     }
 }
