@@ -156,40 +156,120 @@ class KloudWebP_Converter {
     }
 
     /**
-     * Get images from post content
+     * Get images from post content with improved detection
      */
     private function get_images_from_content($content) {
         $images = array();
+        $processed_urls = array(); // Track processed URLs to avoid duplicates
         
-        // Regular expression to find image tags with optional srcset
+        // Find all image tags including those in srcset
         if (preg_match_all('/<img[^>]+>/', $content, $img_tags)) {
             foreach ($img_tags[0] as $img_tag) {
-                $image_data = array(
-                    'tag' => $img_tag,
-                    'url' => '',
-                    'srcset' => ''
-                );
-
                 // Get src attribute
-                if (preg_match('/src=[\'"]([^\'"]+)[\'"]/', $img_tag, $match)) {
-                    $url = $match[1];
-                    // Skip if already WebP
-                    if ($this->is_webp($url)) {
-                        $this->log_debug("Skipping already WebP image: " . $url);
+                if (preg_match('/src=[\'"]([^\'"]+)[\'"]/', $img_tag, $src_match)) {
+                    $url = $this->clean_image_url($src_match[1]);
+                    
+                    // Skip if already processed
+                    if (in_array($url, $processed_urls)) {
                         continue;
                     }
+
+                    // Skip if already WebP but store original URL for reference
+                    if ($this->is_webp($url)) {
+                        $original_url = $this->get_original_image_url($url);
+                        if ($original_url && !in_array($original_url, $processed_urls)) {
+                            $this->log_debug("Found original image for WebP: " . $original_url);
+                            $processed_urls[] = $original_url;
+                            $images[] = array(
+                                'tag' => $img_tag,
+                                'url' => $original_url,
+                                'webp_url' => $url,
+                                'srcset' => ''
+                            );
+                        }
+                        continue;
+                    }
+
+                    // Process if it's an internal image
                     if ($this->is_internal_image($url)) {
-                        $image_data['url'] = $url;
+                        $processed_urls[] = $url;
+                        $image_data = array(
+                            'tag' => $img_tag,
+                            'url' => $url,
+                            'srcset' => ''
+                        );
+
+                        // Get srcset attribute
+                        if (preg_match('/srcset=[\'"]([^\'"]+)[\'"]/', $img_tag, $srcset_match)) {
+                            $srcset = $srcset_match[1];
+                            $image_data['srcset'] = $srcset;
+
+                            // Process srcset URLs
+                            $srcset_urls = explode(',', $srcset);
+                            foreach ($srcset_urls as $srcset_url) {
+                                $parts = preg_split('/\s+/', trim($srcset_url));
+                                if (count($parts) >= 1) {
+                                    $src_url = $this->clean_image_url($parts[0]);
+                                    if (!in_array($src_url, $processed_urls) && 
+                                        !$this->is_webp($src_url) && 
+                                        $this->is_internal_image($src_url)) {
+                                        $processed_urls[] = $src_url;
+                                        $images[] = array(
+                                            'tag' => $img_tag,
+                                            'url' => $src_url,
+                                            'srcset' => ''
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        $images[] = $image_data;
                     }
                 }
+            }
+        }
 
-                // Get srcset attribute
-                if (preg_match('/srcset=[\'"]([^\'"]+)[\'"]/', $img_tag, $match)) {
-                    $image_data['srcset'] = $match[1];
+        // Find background images in inline styles
+        if (preg_match_all('/background-image:\s*url\([\'"]?([^\'")\s]+)[\'"]?\)/i', $content, $bg_matches)) {
+            foreach ($bg_matches[1] as $url) {
+                $url = $this->clean_image_url($url);
+                
+                // Skip if already processed or is WebP
+                if (in_array($url, $processed_urls) || $this->is_webp($url)) {
+                    continue;
                 }
 
-                if (!empty($image_data['url'])) {
-                    $images[] = $image_data;
+                // Process if it's an internal image
+                if ($this->is_internal_image($url)) {
+                    $processed_urls[] = $url;
+                    $images[] = array(
+                        'tag' => 'background-image',
+                        'url' => $url,
+                        'srcset' => ''
+                    );
+                }
+            }
+        }
+
+        // Find images in custom HTML blocks or shortcodes
+        if (preg_match_all('/\[.*?url=[\'"]([^\'"]+)[\'"].*?\]/', $content, $shortcode_matches)) {
+            foreach ($shortcode_matches[1] as $url) {
+                $url = $this->clean_image_url($url);
+                
+                // Skip if already processed or is WebP
+                if (in_array($url, $processed_urls) || $this->is_webp($url)) {
+                    continue;
+                }
+
+                // Process if it's an internal image
+                if ($this->is_internal_image($url)) {
+                    $processed_urls[] = $url;
+                    $images[] = array(
+                        'tag' => 'shortcode',
+                        'url' => $url,
+                        'srcset' => ''
+                    );
                 }
             }
         }
@@ -198,11 +278,93 @@ class KloudWebP_Converter {
     }
 
     /**
-     * Check if image URL is internal
+     * Clean and normalize image URL
+     */
+    private function clean_image_url($url) {
+        // Remove query string and fragments
+        $url = preg_replace('/[?#].*$/', '', $url);
+        
+        // Convert protocol-relative URLs
+        if (strpos($url, '//') === 0) {
+            $url = 'https:' . $url;
+        }
+        
+        // Add site URL to relative URLs
+        if (strpos($url, '/') === 0) {
+            $url = get_site_url() . $url;
+        }
+        
+        return $url;
+    }
+
+    /**
+     * Get original image URL from WebP URL
+     */
+    private function get_original_image_url($webp_url) {
+        // Remove .webp extension
+        $original_url = preg_replace('/\.webp$/', '', $webp_url);
+        
+        // Check common image extensions
+        $extensions = array('.jpg', '.jpeg', '.png');
+        foreach ($extensions as $ext) {
+            $test_url = $original_url . $ext;
+            $test_path = $this->url_to_path($test_url);
+            if ($test_path && file_exists($test_path)) {
+                return $test_url;
+            }
+        }
+        
+        // If no match found, check if original URL exists
+        $original_path = $this->url_to_path($original_url);
+        if ($original_path && file_exists($original_path)) {
+            return $original_url;
+        }
+        
+        return false;
+    }
+
+    /**
+     * Check if image URL is internal with improved validation
      */
     private function is_internal_image($url) {
+        if (empty($url)) {
+            return false;
+        }
+
+        // Get site URL components
         $site_url = get_site_url();
-        return strpos($url, $site_url) === 0 || strpos($url, '/') === 0;
+        $site_host = parse_url($site_url, PHP_URL_HOST);
+        $site_path = parse_url($site_url, PHP_URL_PATH);
+        
+        // Get image URL components
+        $url_parts = parse_url($url);
+        
+        // Handle relative URLs
+        if (!isset($url_parts['host'])) {
+            return true;
+        }
+        
+        // Compare hosts
+        if ($url_parts['host'] !== $site_host) {
+            return false;
+        }
+        
+        // Check if it's in uploads directory
+        $upload_dir = wp_upload_dir();
+        $upload_url = $upload_dir['baseurl'];
+        $upload_path = parse_url($upload_url, PHP_URL_PATH);
+        
+        if (strpos($url, $upload_url) === 0 || 
+            (isset($url_parts['path']) && strpos($url_parts['path'], $upload_path) === 0)) {
+            return true;
+        }
+        
+        // Check if it's in WordPress root
+        if (isset($url_parts['path']) && strpos($url_parts['path'], $site_path) === 0) {
+            return true;
+        }
+        
+        return false;
     }
 
     /**
