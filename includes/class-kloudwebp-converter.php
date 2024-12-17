@@ -146,37 +146,84 @@ class KloudWebP_Converter {
             );
         }
 
-        try {
-            // Create Imagick instance
-            $image = new Imagick($file_path);
-            
-            // Set compression quality
-            $quality = get_option('kloudwebp_compression_quality', 80);
-            
-            // Convert to WebP
-            $image->setImageFormat('webp');
-            $image->setImageCompressionQuality($quality);
-            
-            // Strip metadata to reduce file size
-            $image->stripImage();
-            
-            // Write WebP file
-            $image->writeImage($webp_path);
-            $image->destroy();
+        // Get image type
+        $mime_type = $image_info['mime'];
+        $quality = get_option('kloudwebp_compression_quality', 80);
 
-            return array(
-                'success' => true,
-                'message' => 'Conversion successful',
-                'webp_url' => $this->path_to_url($webp_path),
-                'skipped' => false
-            );
-        } catch (Exception $e) {
-            return array(
-                'success' => false,
-                'message' => $e->getMessage(),
-                'skipped' => false
-            );
+        // Try conversion with Imagick first if available
+        if (extension_loaded('imagick')) {
+            try {
+                $image = new Imagick($file_path);
+                $image->setImageFormat('webp');
+                $image->setImageCompressionQuality($quality);
+                $image->stripImage();
+                $success = $image->writeImage($webp_path);
+                $image->destroy();
+
+                if ($success) {
+                    return array(
+                        'success' => true,
+                        'message' => 'Conversion successful with Imagick',
+                        'webp_url' => $this->path_to_url($webp_path),
+                        'skipped' => false
+                    );
+                }
+            } catch (Exception $e) {
+                // If Imagick fails, we'll try GD below
+            }
         }
+
+        // Try GD if Imagick is not available or failed
+        if (extension_loaded('gd')) {
+            try {
+                // Create image resource based on type
+                switch ($mime_type) {
+                    case 'image/jpeg':
+                        $image = imagecreatefromjpeg($file_path);
+                        break;
+                    case 'image/png':
+                        $image = imagecreatefrompng($file_path);
+                        // Handle transparency
+                        imagepalettetotruecolor($image);
+                        imagealphablending($image, true);
+                        imagesavealpha($image, true);
+                        break;
+                    default:
+                        return array(
+                            'success' => false,
+                            'message' => 'Unsupported image type',
+                            'skipped' => true
+                        );
+                }
+
+                if ($image) {
+                    // Convert to WebP
+                    $success = imagewebp($image, $webp_path, $quality);
+                    imagedestroy($image);
+
+                    if ($success) {
+                        return array(
+                            'success' => true,
+                            'message' => 'Conversion successful with GD',
+                            'webp_url' => $this->path_to_url($webp_path),
+                            'skipped' => false
+                        );
+                    }
+                }
+            } catch (Exception $e) {
+                return array(
+                    'success' => false,
+                    'message' => 'GD conversion failed: ' . $e->getMessage(),
+                    'skipped' => false
+                );
+            }
+        }
+
+        return array(
+            'success' => false,
+            'message' => 'No suitable image conversion method available',
+            'skipped' => false
+        );
     }
 
     /**

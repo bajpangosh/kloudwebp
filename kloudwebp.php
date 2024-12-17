@@ -24,12 +24,12 @@ define('KLOUDWEBP_VERSION', '1.0.0');
 define('KLOUDWEBP_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('KLOUDWEBP_PLUGIN_URL', plugin_dir_url(__FILE__));
 
-// Check for Imagick extension
-function kloudwebp_check_imagick() {
-    if (!extension_loaded('imagick')) {
+// Check for Imagick or GD extension
+function kloudwebp_check_requirements() {
+    if (!extension_loaded('imagick') && !extension_loaded('gd')) {
         add_action('admin_notices', function() {
             echo '<div class="error"><p>';
-            echo __('KloudWebP requires the Imagick PHP extension to be installed. Please contact your hosting provider or server administrator to install and enable Imagick.', 'kloudwebp');
+            echo __('KloudWebP requires either the Imagick or GD PHP extension to be installed. Please contact your hosting provider or server administrator to install and enable either Imagick or GD.', 'kloudwebp');
             echo '</p></div>';
         });
         return false;
@@ -39,7 +39,7 @@ function kloudwebp_check_imagick() {
 
 // Initialize the plugin
 function kloudwebp_init() {
-    if (!kloudwebp_check_imagick()) {
+    if (!kloudwebp_check_requirements()) {
         return;
     }
 
