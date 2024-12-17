@@ -23,7 +23,8 @@ class KloudWebP_Admin {
 
         // Handle post conversion
         add_action('admin_post_kloudwebp_convert_posts', array($this, 'handle_convert_posts'));
-        add_action('wp_ajax_kloudwebp_convert_single_post', array($this, 'ajax_convert_single_post'));
+        add_action('wp_ajax_kloudwebp_convert_post', array($this, 'handle_post_conversion'));
+        add_action('wp_ajax_kloudwebp_get_stats', array($this, 'handle_get_stats'));
         
         // Add admin notices
         add_action('admin_notices', array($this, 'admin_notices'));
@@ -37,12 +38,6 @@ class KloudWebP_Admin {
         add_filter('wp_get_attachment_url', array($this, 'filter_attachment_url'), 10, 2);
         add_filter('wp_get_attachment_image_src', array($this, 'filter_attachment_image_src'), 10, 4);
         
-        // Register AJAX handlers
-        add_action('wp_ajax_kloudwebp_convert_post', array($this, 'handle_post_conversion'));
-        
-        // Register admin-post handler for bulk conversion
-        add_action('admin_post_kloudwebp_bulk_convert', array($this, 'handle_bulk_conversion'));
-
         // Enqueue scripts and styles
         add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
     }
@@ -720,6 +715,62 @@ class KloudWebP_Admin {
         wp_send_json_success($results);
     }
 
+    public function handle_post_conversion() {
+        check_ajax_referer('kloudwebp_convert_nonce', 'nonce');
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            return;
+        }
+
+        $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+        if (!$post_id) {
+            wp_send_json_error('Invalid post ID');
+            return;
+        }
+
+        // Get all images in the post
+        $images = $this->get_post_images($post_id);
+        $converted = 0;
+        $errors = array();
+        
+        foreach ($images['unconverted'] as $image) {
+            try {
+                $result = $this->converter->convert_image($image['path'], false);
+                if ($result) {
+                    $converted++;
+                }
+            } catch (Exception $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+        
+        wp_send_json_success(array(
+            'message' => sprintf(__('%d images converted successfully'), $converted),
+            'converted' => $converted,
+            'total' => count($images['all']),
+            'errors' => $errors
+        ));
+    }
+
+    /**
+     * Handle AJAX request for getting updated stats
+     */
+    public function handle_get_stats() {
+        check_ajax_referer('kloudwebp_convert_nonce', 'nonce');
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            return;
+        }
+        
+        wp_send_json_success(array(
+            'total_images' => $this->get_total_images_count(),
+            'converted_images' => $this->get_converted_images_count(),
+            'space_saved' => size_format($this->get_total_space_saved())
+        ));
+    }
+
     /**
      * Get all images from a post's content
      * 
@@ -799,115 +850,9 @@ class KloudWebP_Admin {
         }
     }
 
-    public function handle_post_conversion() {
-        check_ajax_referer('kloudwebp_convert_nonce', 'nonce');
-        
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error('Insufficient permissions');
-            return;
-        }
-
-        $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
-        if (!$post_id) {
-            wp_send_json_error('Invalid post ID');
-            return;
-        }
-
-        // Get all images in the post
-        $images = $this->get_post_images($post_id);
-        $converted = 0;
-        $errors = array();
-        
-        foreach ($images['unconverted'] as $image) {
-            try {
-                $result = $this->converter->convert_image($image['path'], false);
-                if ($result) {
-                    $converted++;
-                }
-            } catch (Exception $e) {
-                $errors[] = $e->getMessage();
-            }
-        }
-        
-        wp_send_json_success(array(
-            'message' => sprintf(__('%d images converted successfully'), $converted),
-            'converted' => $converted,
-            'total' => count($images['all']),
-            'errors' => $errors
-        ));
-    }
-
     /**
-     * Handle bulk conversion of all images
+     * Enqueue admin scripts and styles
      */
-    public function handle_bulk_conversion() {
-        if (!isset($_POST['kloudwebp_nonce']) || !wp_verify_nonce($_POST['kloudwebp_nonce'], 'kloudwebp_bulk_convert')) {
-            wp_die(__('Security check failed'));
-        }
-
-        if (!current_user_can('manage_options')) {
-            wp_die(__('Insufficient permissions'));
-        }
-
-        // Get all unconverted images
-        $unconverted_images = $this->get_unconverted_images();
-        $converted = 0;
-        $errors = array();
-
-        foreach ($unconverted_images as $image) {
-            try {
-                $result = $this->converter->convert_image($image, false);
-                if ($result) {
-                    $converted++;
-                }
-            } catch (Exception $e) {
-                $errors[] = $e->getMessage();
-            }
-        }
-
-        // Add admin notice
-        add_settings_error(
-            'kloudwebp_messages',
-            'kloudwebp_bulk_convert',
-            sprintf(__('%d images converted successfully. %d errors occurred.'), $converted, count($errors)),
-            $converted > 0 ? 'updated' : 'error'
-        );
-
-        // Redirect back to dashboard
-        wp_redirect(admin_url('admin.php?page=' . $this->plugin_name));
-        exit;
-    }
-
-    /**
-     * Get all unconverted images from the media library
-     */
-    private function get_unconverted_images() {
-        $args = array(
-            'post_type' => 'attachment',
-            'post_mime_type' => array('image/jpeg', 'image/png'),
-            'posts_per_page' => -1,
-            'meta_query' => array(
-                array(
-                    'key' => '_webp_converted',
-                    'compare' => 'NOT EXISTS'
-                )
-            )
-        );
-        
-        $query = new WP_Query($args);
-        $images = array();
-        
-        if ($query->have_posts()) {
-            while ($query->have_posts()) {
-                $query->the_post();
-                $images[] = wp_get_attachment_url(get_the_ID());
-            }
-        }
-        
-        wp_reset_postdata();
-        return $images;
-    }
-
     public function enqueue_scripts($hook) {
         if (strpos($hook, $this->plugin_name) === false) {
             return;
@@ -934,10 +879,11 @@ class KloudWebP_Admin {
             'kloudwebpAjax',
             array(
                 'ajaxurl' => admin_url('admin-ajax.php'),
-                'nonce' => wp_create_nonce('kloudwebp_convert_post'),
-                'converting' => __('Converting...'),
-                'error' => __('Error'),
-                'success' => __('Converted')
+                'nonce' => wp_create_nonce('kloudwebp_convert_nonce'),
+                'converting' => __('Converting...', 'kloudwebp'),
+                'convert' => __('Convert', 'kloudwebp'),
+                'error' => __('Error', 'kloudwebp'),
+                'success' => __('Converted', 'kloudwebp')
             )
         );
     }
