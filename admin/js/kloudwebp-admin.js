@@ -3,20 +3,17 @@
 
     $(document).ready(function() {
         // Function to show admin notices
-        function showNotice(type, message) {
-            const noticeClass = type === 'success' ? 'notice-success' : 'notice-error';
-            const notice = $(`<div class="notice ${noticeClass} is-dismissible"><p>${message}</p></div>`);
+        function showNotice(message, type) {
+            var notice = $('<div class="notice notice-' + type + ' is-dismissible"><p>' + message + '</p></div>');
+            var wrap = $('.wrap').first();
+            $('.notice').remove(); // Remove existing notices
+            wrap.prepend(notice);
             
-            // Remove existing notices
-            $('.notice').remove();
-            
-            // Add new notice at the top of the page
-            $('.wrap > h1').after(notice);
-            
-            // Make notice dismissible
-            if (wp.notices && wp.notices.removeDismissible) {
-                wp.notices.removeDismissible(notice);
-            }
+            // Make the notice dismissible
+            notice.append('<button type="button" class="notice-dismiss"><span class="screen-reader-text">Dismiss this notice.</span></button>');
+            notice.find('.notice-dismiss').on('click', function() {
+                notice.fadeOut(function() { $(this).remove(); });
+            });
         }
 
         // Handle individual post conversion
@@ -54,7 +51,7 @@
                         );
                         
                         // Show success message
-                        showNotice('success', response.data.message);
+                        showNotice(response.data.message, 'success');
                         
                         // Update button state
                         if (response.data.converted === response.data.total) {
@@ -70,14 +67,14 @@
                         // Update stats cards if available
                         updateStatsCards();
                     } else {
-                        showNotice('error', response.data || 'Error converting images');
+                        showNotice(response.data || 'Error converting images', 'error');
                         button.removeClass('updating-message')
                               .text(kloudwebpAjax.convert)
                               .prop('disabled', false);
                     }
                 },
                 error: function(xhr, status, error) {
-                    showNotice('error', 'Server error: ' + error);
+                    showNotice('Server error: ' + error, 'error');
                     button.removeClass('updating-message')
                           .text(kloudwebpAjax.convert)
                           .prop('disabled', false);
@@ -176,6 +173,10 @@
             e.preventDefault();
             var button = $(this);
             var post_id = button.data('post-id');
+            var row = button.closest('tr');
+            var progressBar = row.find('.progress-fill');
+            var progressText = row.find('.progress-text');
+            var imagesCell = row.find('.column-images');
             var originalText = button.text();
 
             // Disable button and show loading state
@@ -191,23 +192,46 @@
                 },
                 success: function(response) {
                     if (response.success) {
-                        button.removeClass('button-primary')
-                              .addClass('button-disabled')
-                              .text(kloudwebpAjax.success);
+                        // Update progress bar and text
+                        var percentage = (response.data.converted / response.data.total) * 100;
+                        progressBar.css('width', percentage + '%');
+                        progressText.text(percentage + '%');
+                        
+                        // Update images count
+                        imagesCell.text(response.data.converted + ' / ' + response.data.total);
+
+                        // Update button state
+                        if (percentage === 100) {
+                            button.removeClass('button-primary')
+                                  .addClass('button-disabled')
+                                  .text(kloudwebpAjax.success)
+                                  .prop('disabled', true);
+                        } else {
+                            button.text(originalText);
+                        }
+
+                        // Update global stats
                         updateStats();
+
+                        // Show success message if provided
+                        if (response.data.message) {
+                            showNotice(response.data.message, 'success');
+                        }
                     } else {
                         button.text(kloudwebpAjax.error);
-                        console.error('Conversion failed:', response.data);
+                        if (response.data) {
+                            showNotice(response.data, 'error');
+                        }
                     }
                 },
                 error: function(xhr, status, error) {
                     button.text(kloudwebpAjax.error);
-                    console.error('AJAX error:', error);
+                    showNotice('Ajax error: ' + error, 'error');
                 },
                 complete: function() {
-                    setTimeout(function() {
+                    if (button.text() === kloudwebpAjax.converting) {
                         button.prop('disabled', false).text(originalText);
-                    }, 2000);
+                    }
                 }
             });
         });
@@ -229,6 +253,40 @@
                 }
             });
         }
+
+        // Handle post type and status filters
+        $('#post-type-filter, #conversion-status-filter').on('change', function() {
+            var postType = $('#post-type-filter').val();
+            var status = $('#conversion-status-filter').val();
+            
+            $('.kloudwebp-posts-table tbody tr').each(function() {
+                var row = $(this);
+                var showRow = true;
+                
+                // Filter by post type
+                if (postType && row.find('td:nth-child(2)').text().toLowerCase() !== postType) {
+                    showRow = false;
+                }
+                
+                // Filter by conversion status
+                if (status) {
+                    var progress = parseInt(row.find('.progress-text').text());
+                    switch(status) {
+                        case 'unconverted':
+                            if (progress > 0) showRow = false;
+                            break;
+                        case 'partial':
+                            if (progress === 0 || progress === 100) showRow = false;
+                            break;
+                        case 'converted':
+                            if (progress < 100) showRow = false;
+                            break;
+                    }
+                }
+                
+                row.toggle(showRow);
+            });
+        });
 
         // Initialize tooltips if using Bootstrap
         if (typeof $().tooltip === 'function') {

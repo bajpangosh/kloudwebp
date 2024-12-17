@@ -14,15 +14,15 @@ if (!defined('WPINC')) {
     <div class="kloudwebp-stats-cards">
         <div class="stats-card">
             <h3><?php _e('Total Images', 'kloudwebp'); ?></h3>
-            <div class="stat-value"><?php echo $this->get_total_images_count(); ?></div>
+            <div id="total-images" class="stat-value"><?php echo $this->get_total_images_count(); ?></div>
         </div>
         <div class="stats-card">
             <h3><?php _e('Converted Images', 'kloudwebp'); ?></h3>
-            <div class="stat-value"><?php echo $this->get_converted_images_count(); ?></div>
+            <div id="converted-images" class="stat-value"><?php echo $this->get_converted_images_count(); ?></div>
         </div>
         <div class="stats-card">
             <h3><?php _e('Space Saved', 'kloudwebp'); ?></h3>
-            <div class="stat-value"><?php echo size_format($this->get_total_space_saved()); ?></div>
+            <div id="space-saved" class="stat-value"><?php echo size_format($this->get_total_space_saved()); ?></div>
         </div>
     </div>
 
@@ -99,17 +99,21 @@ if (!defined('WPINC')) {
                         <td class="column-images"><?php echo $converted_images . ' / ' . $total_images; ?></td>
                         <td>
                             <div class="conversion-progress-bar">
-                                <div class="conversion-progress" style="width: <?php echo $percentage; ?>%"></div>
+                                <div class="progress-fill" style="width: <?php echo $percentage; ?>%"></div>
+                                <span class="progress-text"><?php echo $percentage; ?>%</span>
                             </div>
-                            <span class="progress-text"><?php echo $percentage; ?>%</span>
                         </td>
-                        <td><?php echo get_the_modified_date('Y-m-d H:i:s', $post->ID); ?></td>
+                        <td><?php echo get_the_modified_date('', $post->ID); ?></td>
                         <td>
-                            <?php if ($total_images > $converted_images) : ?>
-                                <button class="button button-primary kloudwebp-convert-post" 
+                            <?php if ($converted_images < $total_images): ?>
+                                <button class="button button-primary convert-post-button" 
                                         data-post-id="<?php echo $post->ID; ?>"
-                                        data-nonce="<?php echo wp_create_nonce('kloudwebp_convert_nonce'); ?>">
+                                        data-progress="<?php echo $percentage; ?>">
                                     <?php _e('Convert', 'kloudwebp'); ?>
+                                </button>
+                            <?php else: ?>
+                                <button class="button button-disabled" disabled>
+                                    <?php _e('Converted', 'kloudwebp'); ?>
                                 </button>
                             <?php endif; ?>
                         </td>
@@ -182,7 +186,7 @@ if (!defined('WPINC')) {
     margin-bottom: 4px;
 }
 
-.conversion-progress {
+.progress-fill {
     height: 100%;
     background: #2271b1;
     transition: width 0.3s ease;
