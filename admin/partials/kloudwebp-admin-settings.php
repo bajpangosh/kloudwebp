@@ -15,7 +15,7 @@ if (!defined('WPINC')) {
             <?php
             settings_fields('kloudwebp_settings');
             do_settings_sections('kloudwebp_settings');
-            submit_button('Save Settings');
+            submit_button();
             ?>
         </form>
     </div>
@@ -33,16 +33,27 @@ if (!defined('WPINC')) {
 
 .kloudwebp-settings .form-table th {
     padding: 20px;
-    width: 200px;
+    width: 250px;
 }
 
 .kloudwebp-settings .form-table td {
     padding: 20px;
+    vertical-align: top;
+    padding-top: 15px;
+}
+
+.kloudwebp-settings .form-table label {
+    display: block;
+    margin-bottom: 5px;
+}
+
+.kloudwebp-settings .form-table input[type="number"] {
+    width: 100px;
 }
 
 .kloudwebp-settings .description {
     color: #646970;
     font-style: italic;
-    margin-top: 5px;
+    margin-top: 4px;
 }
 </style>

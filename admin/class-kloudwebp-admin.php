@@ -62,14 +62,6 @@ class KloudWebP_Admin {
         );
 
         add_settings_field(
-            'auto_convert',
-            __('Auto Convert Images', 'kloudwebp'),
-            array($this, 'render_auto_convert_field'),
-            'kloudwebp_settings',
-            'kloudwebp_general_settings'
-        );
-
-        add_settings_field(
             'keep_original',
             __('Keep Original Images', 'kloudwebp'),
             array($this, 'render_keep_original_field'),
@@ -88,20 +80,6 @@ class KloudWebP_Admin {
 
     public function render_settings_section() {
         echo '<p>' . __('Configure how KloudWebP handles image conversion.', 'kloudwebp') . '</p>';
-    }
-
-    public function render_auto_convert_field() {
-        $options = get_option('kloudwebp_settings');
-        $auto_convert = isset($options['auto_convert']) ? $options['auto_convert'] : 1;
-        ?>
-        <label>
-            <input type="checkbox" name="kloudwebp_settings[auto_convert]" value="1" <?php checked(1, $auto_convert); ?>>
-            <?php _e('Automatically convert images to WebP upon upload', 'kloudwebp'); ?>
-        </label>
-        <p class="description">
-            <?php _e('When enabled, images will be automatically converted to WebP format when uploaded to the media library.', 'kloudwebp'); ?>
-        </p>
-        <?php
     }
 
     public function render_keep_original_field() {
@@ -136,9 +114,6 @@ class KloudWebP_Admin {
 
     public function sanitize_settings($input) {
         $sanitized = array();
-        
-        // Auto convert setting
-        $sanitized['auto_convert'] = isset($input['auto_convert']) ? 1 : 0;
         
         // Keep original setting
         $sanitized['keep_original'] = isset($input['keep_original']) ? 1 : 0;
