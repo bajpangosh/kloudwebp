@@ -28,6 +28,8 @@ class KloudWebP_Admin {
         add_action('wp_ajax_kloudwebp_get_conversion_status', array($this, 'ajax_get_conversion_status'));
         add_action('wp_ajax_kloudwebp_refresh_debug_log', array($this, 'ajax_refresh_debug_log'));
         add_action('wp_ajax_kloudwebp_clear_debug_log', array($this, 'ajax_clear_debug_log'));
+        add_action('wp_ajax_kloudwebp_get_page_stats', array($this, 'ajax_get_page_stats'));
+        add_action('wp_ajax_kloudwebp_reconvert_all', array($this, 'ajax_reconvert_all'));
     }
 
     /**
@@ -111,33 +113,301 @@ class KloudWebP_Admin {
     }
 
     /**
-     * Render dashboard page
+     * Render dashboard page with image status
      */
     public function render_dashboard_page() {
         if (!current_user_can('manage_options')) {
-            wp_die(__('You do not have sufficient permissions to access this page.'));
+            return;
         }
         ?>
         <div class="wrap">
             <h1><?php _e('KloudWebP Dashboard', 'kloudwebp'); ?></h1>
             
+            <div class="kloudwebp-stats-container">
+                <h2><?php _e('Current Page Images Status', 'kloudwebp'); ?></h2>
+                <div class="kloudwebp-page-stats">
+                    <div id="kloudwebp-image-stats">
+                        <?php $this->render_page_image_stats(); ?>
+                    </div>
+                    <button id="kloudwebp-refresh-stats" class="button">
+                        <?php _e('Refresh Stats', 'kloudwebp'); ?>
+                    </button>
+                </div>
+            </div>
+
             <div class="kloudwebp-bulk-actions">
-                <button id="kloudwebp-bulk-convert" class="button button-primary">
-                    <?php _e('Bulk Convert All Images', 'kloudwebp'); ?>
+                <h2><?php _e('Bulk Actions', 'kloudwebp'); ?></h2>
+                <button id="kloudwebp-convert-all" class="button button-primary">
+                    <?php _e('Convert All Images', 'kloudwebp'); ?>
+                </button>
+                <button id="kloudwebp-reconvert-all" class="button">
+                    <?php _e('Re-convert All WebP Images', 'kloudwebp'); ?>
                 </button>
             </div>
 
-            <div class="kloudwebp-log-container">
-                <h3><?php _e('Conversion Log', 'kloudwebp'); ?></h3>
-                <div id="kloudwebp-log" class="kloudwebp-log"></div>
-            </div>
-
             <div class="kloudwebp-conversion-table">
-                <h3><?php _e('Posts and Pages', 'kloudwebp'); ?></h3>
+                <h2><?php _e('Image Conversion Status', 'kloudwebp'); ?></h2>
                 <?php $this->render_conversion_table(); ?>
             </div>
         </div>
+
+        <style>
+            .kloudwebp-stats-container {
+                background: #fff;
+                padding: 20px;
+                margin: 20px 0;
+                border: 1px solid #ccd0d4;
+                box-shadow: 0 1px 1px rgba(0,0,0,.04);
+            }
+            .kloudwebp-page-stats {
+                margin: 15px 0;
+            }
+            .kloudwebp-stat-item {
+                margin: 10px 0;
+                padding: 10px;
+                background: #f8f9fa;
+                border-left: 4px solid #ccc;
+            }
+            .kloudwebp-stat-item.webp {
+                border-left-color: #46b450;
+            }
+            .kloudwebp-stat-item.non-webp {
+                border-left-color: #dc3232;
+            }
+            .kloudwebp-stat-item.skipped {
+                border-left-color: #ffb900;
+            }
+            .kloudwebp-image-list {
+                margin-top: 5px;
+                font-size: 12px;
+                color: #666;
+            }
+            .kloudwebp-bulk-actions {
+                margin: 20px 0;
+            }
+            .kloudwebp-bulk-actions .button {
+                margin-right: 10px;
+            }
+        </style>
+
+        <script>
+        jQuery(document).ready(function($) {
+            // Refresh stats
+            $('#kloudwebp-refresh-stats').on('click', function(e) {
+                e.preventDefault();
+                var $button = $(this);
+                $button.prop('disabled', true);
+
+                $.post(ajaxurl, {
+                    action: 'kloudwebp_get_page_stats',
+                    nonce: kloudwebpAjax.nonce
+                }, function(response) {
+                    if (response.success) {
+                        $('#kloudwebp-image-stats').html(response.data.html);
+                    }
+                }).always(function() {
+                    $button.prop('disabled', false);
+                });
+            });
+
+            // Re-convert all WebP images
+            $('#kloudwebp-reconvert-all').on('click', function(e) {
+                e.preventDefault();
+                if (!confirm('<?php _e('This will re-convert all existing WebP images. Continue?', 'kloudwebp'); ?>')) {
+                    return;
+                }
+                var $button = $(this);
+                $button.prop('disabled', true);
+
+                $.post(ajaxurl, {
+                    action: 'kloudwebp_reconvert_all',
+                    nonce: kloudwebpAjax.nonce
+                }, function(response) {
+                    if (response.success) {
+                        location.reload();
+                    } else {
+                        alert(response.data.message);
+                    }
+                }).always(function() {
+                    $button.prop('disabled', false);
+                });
+            });
+        });
+        </script>
         <?php
+    }
+
+    /**
+     * Render page image statistics
+     */
+    private function render_page_image_stats() {
+        global $wpdb;
+        
+        // Get all posts
+        $posts = $wpdb->get_results("
+            SELECT ID, post_title, post_type 
+            FROM {$wpdb->posts} 
+            WHERE post_status = 'publish' 
+            AND (post_type = 'post' OR post_type = 'page')
+        ");
+
+        $stats = array(
+            'webp' => array(),
+            'non_webp' => array(),
+            'skipped' => array()
+        );
+
+        foreach ($posts as $post) {
+            $content = get_post_field('post_content', $post->ID);
+            $images = $this->converter->analyze_post_images($post->ID, $content);
+
+            if (!empty($images['webp'])) {
+                $stats['webp'][] = array(
+                    'id' => $post->ID,
+                    'title' => $post->post_title,
+                    'images' => $images['webp']
+                );
+            }
+            if (!empty($images['non_webp'])) {
+                $stats['non_webp'][] = array(
+                    'id' => $post->ID,
+                    'title' => $post->post_title,
+                    'images' => $images['non_webp']
+                );
+            }
+            if (!empty($images['skipped'])) {
+                $stats['skipped'][] = array(
+                    'id' => $post->ID,
+                    'title' => $post->post_title,
+                    'images' => $images['skipped']
+                );
+            }
+        }
+
+        // Output statistics
+        if (empty($stats['webp']) && empty($stats['non_webp']) && empty($stats['skipped'])) {
+            echo '<p>' . __('No images found in any posts or pages.', 'kloudwebp') . '</p>';
+            return;
+        }
+
+        // WebP Images
+        if (!empty($stats['webp'])) {
+            echo '<div class="kloudwebp-stat-item webp">';
+            echo '<strong>' . __('WebP Images:', 'kloudwebp') . '</strong> ';
+            echo count($stats['webp']) . ' ' . __('posts/pages', 'kloudwebp');
+            echo '<div class="kloudwebp-image-list">';
+            foreach ($stats['webp'] as $item) {
+                echo '<div>';
+                echo esc_html($item['title']) . ' (ID: ' . $item['id'] . '): ';
+                echo count($item['images']) . ' ' . __('images', 'kloudwebp');
+                echo '</div>';
+            }
+            echo '</div></div>';
+        }
+
+        // Non-WebP Images
+        if (!empty($stats['non_webp'])) {
+            echo '<div class="kloudwebp-stat-item non-webp">';
+            echo '<strong>' . __('Non-WebP Images:', 'kloudwebp') . '</strong> ';
+            echo count($stats['non_webp']) . ' ' . __('posts/pages', 'kloudwebp');
+            echo '<div class="kloudwebp-image-list">';
+            foreach ($stats['non_webp'] as $item) {
+                echo '<div>';
+                echo esc_html($item['title']) . ' (ID: ' . $item['id'] . '): ';
+                echo count($item['images']) . ' ' . __('images', 'kloudwebp');
+                echo '</div>';
+            }
+            echo '</div></div>';
+        }
+
+        // Skipped Images
+        if (!empty($stats['skipped'])) {
+            echo '<div class="kloudwebp-stat-item skipped">';
+            echo '<strong>' . __('Skipped Images:', 'kloudwebp') . '</strong> ';
+            echo count($stats['skipped']) . ' ' . __('posts/pages', 'kloudwebp');
+            echo '<div class="kloudwebp-image-list">';
+            foreach ($stats['skipped'] as $item) {
+                echo '<div>';
+                echo esc_html($item['title']) . ' (ID: ' . $item['id'] . '): ';
+                echo count($item['images']) . ' ' . __('images', 'kloudwebp');
+                echo '</div>';
+            }
+            echo '</div></div>';
+        }
+    }
+
+    /**
+     * AJAX handler for getting page stats
+     */
+    public function ajax_get_page_stats() {
+        if (!check_ajax_referer('kloudwebp_ajax', 'nonce', false) || 
+            !current_user_can('manage_options')) {
+            wp_send_json_error(array(
+                'message' => __('Unauthorized access.', 'kloudwebp')
+            ));
+            return;
+        }
+
+        ob_start();
+        $this->render_page_image_stats();
+        $html = ob_get_clean();
+
+        wp_send_json_success(array(
+            'html' => $html
+        ));
+    }
+
+    /**
+     * AJAX handler for reconverting all images
+     */
+    public function ajax_reconvert_all() {
+        if (!check_ajax_referer('kloudwebp_ajax', 'nonce', false) || 
+            !current_user_can('manage_options')) {
+            wp_send_json_error(array(
+                'message' => __('Unauthorized access.', 'kloudwebp')
+            ));
+            return;
+        }
+
+        try {
+            global $wpdb;
+            
+            // Get all WebP images
+            $upload_dir = wp_upload_dir();
+            $webp_files = glob($upload_dir['basedir'] . '/**/*.webp');
+            
+            $converted = 0;
+            $failed = 0;
+            
+            foreach ($webp_files as $webp_file) {
+                // Get original file
+                $original_file = preg_replace('/\.webp$/', '', $webp_file);
+                if (file_exists($original_file)) {
+                    // Remove existing WebP
+                    @unlink($webp_file);
+                    
+                    // Convert original
+                    $result = $this->converter->convert_image($this->converter->path_to_url($original_file));
+                    if ($result['success']) {
+                        $converted++;
+                    } else {
+                        $failed++;
+                    }
+                }
+            }
+            
+            wp_send_json_success(array(
+                'message' => sprintf(
+                    __('Reconversion complete. Converted: %d, Failed: %d', 'kloudwebp'),
+                    $converted,
+                    $failed
+                )
+            ));
+        } catch (Exception $e) {
+            wp_send_json_error(array(
+                'message' => $e->getMessage()
+            ));
+        }
     }
 
     /**

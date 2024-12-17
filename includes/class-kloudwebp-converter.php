@@ -56,7 +56,7 @@ class KloudWebP_Converter {
                     foreach ($srcset_urls as $srcset_url) {
                         $parts = preg_split('/\s+/', trim($srcset_url));
                         if (count($parts) >= 1) {
-                            $src_url = $parts[0];
+                            $src_url = $this->clean_image_url($parts[0]);
                             $srcset_result = $this->convert_image($src_url);
                             if ($srcset_result['success']) {
                                 $this->log_debug("Successfully converted srcset image: " . $src_url);
@@ -146,6 +146,103 @@ class KloudWebP_Converter {
             'total' => count($images),
             'status' => $status
         );
+    }
+
+    /**
+     * Analyze images in a post and categorize them
+     */
+    public function analyze_post_images($post_id, $content = null) {
+        if ($content === null) {
+            $content = get_post_field('post_content', $post_id);
+        }
+
+        $images = $this->get_images_from_content($content);
+        $result = array(
+            'webp' => array(),
+            'non_webp' => array(),
+            'skipped' => array()
+        );
+
+        foreach ($images as $image) {
+            $url = $image['url'];
+            $file_path = $this->url_to_path($url);
+
+            // Skip if file doesn't exist
+            if (!$file_path || !file_exists($file_path)) {
+                $result['skipped'][] = array(
+                    'url' => $url,
+                    'reason' => 'File not found'
+                );
+                continue;
+            }
+
+            // Check if WebP version exists
+            $webp_path = $file_path . '.webp';
+            $webp_url = $url . '.webp';
+
+            if (file_exists($webp_path)) {
+                // Check if WebP is valid
+                if (filesize($webp_path) > 0 && @getimagesize($webp_path)) {
+                    $result['webp'][] = array(
+                        'url' => $url,
+                        'webp_url' => $webp_url,
+                        'size_original' => filesize($file_path),
+                        'size_webp' => filesize($webp_path)
+                    );
+                } else {
+                    // Invalid WebP file
+                    @unlink($webp_path); // Remove invalid file
+                    $result['non_webp'][] = array(
+                        'url' => $url,
+                        'reason' => 'Invalid WebP version'
+                    );
+                }
+            } else {
+                // Check if file is a valid image
+                $image_info = @getimagesize($file_path);
+                if (!$image_info) {
+                    $result['skipped'][] = array(
+                        'url' => $url,
+                        'reason' => 'Not a valid image'
+                    );
+                    continue;
+                }
+
+                // Check file size
+                $file_size = filesize($file_path);
+                $max_size = 10 * 1024 * 1024; // 10MB limit
+                if ($file_size > $max_size) {
+                    $result['skipped'][] = array(
+                        'url' => $url,
+                        'reason' => 'File too large (max 10MB)'
+                    );
+                    continue;
+                }
+
+                // Check image dimensions
+                list($width, $height) = $image_info;
+                $max_dimension = 5000; // 5000px limit
+                if ($width > $max_dimension || $height > $max_dimension) {
+                    $result['skipped'][] = array(
+                        'url' => $url,
+                        'reason' => 'Image dimensions too large (max 5000px)'
+                    );
+                    continue;
+                }
+
+                $result['non_webp'][] = array(
+                    'url' => $url,
+                    'mime' => $image_info['mime'],
+                    'dimensions' => array(
+                        'width' => $width,
+                        'height' => $height
+                    ),
+                    'size' => $file_size
+                );
+            }
+        }
+
+        return $result;
     }
 
     /**
