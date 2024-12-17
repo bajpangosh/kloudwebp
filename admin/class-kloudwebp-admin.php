@@ -608,7 +608,8 @@ class KloudWebP_Admin {
         $results = array(
             'success' => 0,
             'failed' => 0,
-            'skipped' => 0
+            'skipped' => 0,
+            'updated_posts' => 0
         );
 
         foreach ($images['unconverted'] as $image) {
@@ -729,28 +730,40 @@ class KloudWebP_Admin {
             return;
         }
 
-        // Get all images in the post
-        $images = $this->get_post_images($post_id);
-        $converted = 0;
-        $errors = array();
-        
-        foreach ($images['unconverted'] as $image) {
-            try {
-                $result = $this->converter->convert_image($image['path'], false);
-                if ($result) {
-                    $converted++;
+        try {
+            // Get all images in the post
+            $images = $this->get_post_images($post_id);
+            $converted = 0;
+            $errors = array();
+            $total = count($images['unconverted']);
+            
+            foreach ($images['unconverted'] as $image) {
+                try {
+                    $result = $this->converter->convert_image($image['path'], false);
+                    if ($result) {
+                        $converted++;
+                    }
+                } catch (Exception $e) {
+                    $errors[] = $e->getMessage();
                 }
-            } catch (Exception $e) {
-                $errors[] = $e->getMessage();
             }
+            
+            $response = array(
+                'success' => true,
+                'message' => sprintf(__('%d out of %d images converted successfully', 'kloudwebp'), $converted, $total),
+                'converted' => $converted,
+                'total' => $total,
+                'errors' => $errors
+            );
+            
+            wp_send_json_success($response);
+            
+        } catch (Exception $e) {
+            wp_send_json_error(array(
+                'message' => $e->getMessage(),
+                'errors' => array($e->getMessage())
+            ));
         }
-        
-        wp_send_json_success(array(
-            'message' => sprintf(__('%d images converted successfully'), $converted),
-            'converted' => $converted,
-            'total' => count($images['all']),
-            'errors' => $errors
-        ));
     }
 
     /**
@@ -854,7 +867,8 @@ class KloudWebP_Admin {
      * Enqueue admin scripts and styles
      */
     public function enqueue_scripts($hook) {
-        if (strpos($hook, $this->plugin_name) === false) {
+        // Only load on plugin pages
+        if (!strpos($hook, $this->plugin_name)) {
             return;
         }
 
@@ -874,6 +888,7 @@ class KloudWebP_Admin {
             true
         );
 
+        // Add debug info to help troubleshoot
         wp_localize_script(
             $this->plugin_name,
             'kloudwebpAjax',
@@ -883,7 +898,12 @@ class KloudWebP_Admin {
                 'converting' => __('Converting...', 'kloudwebp'),
                 'convert' => __('Convert', 'kloudwebp'),
                 'error' => __('Error', 'kloudwebp'),
-                'success' => __('Converted', 'kloudwebp')
+                'success' => __('Converted', 'kloudwebp'),
+                'debug' => array(
+                    'hook' => $hook,
+                    'plugin_name' => $this->plugin_name,
+                    'version' => $this->version
+                )
             )
         );
     }
