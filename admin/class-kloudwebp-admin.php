@@ -37,14 +37,14 @@ class KloudWebP_Admin {
         add_filter('wp_get_attachment_url', array($this, 'filter_attachment_url'), 10, 2);
         add_filter('wp_get_attachment_image_src', array($this, 'filter_attachment_image_src'), 10, 4);
         
-        // Enqueue scripts and styles
-        add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
-
         // Register AJAX handlers
         add_action('wp_ajax_kloudwebp_convert_post', array($this, 'handle_post_conversion'));
         
         // Register admin-post handler for bulk conversion
         add_action('admin_post_kloudwebp_bulk_convert', array($this, 'handle_bulk_conversion'));
+
+        // Enqueue scripts and styles
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
     }
 
     public function register_settings() {
@@ -551,7 +551,6 @@ class KloudWebP_Admin {
     public function get_posts_conversion_status() {
         global $wpdb;
         
-        // Get all published posts and pages
         $posts = $wpdb->get_results("
             SELECT ID, post_title, post_type, post_modified 
             FROM {$wpdb->posts} 
